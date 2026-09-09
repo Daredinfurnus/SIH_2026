@@ -3,9 +3,10 @@ import { Play, Square, Clock, FileAudio } from 'lucide-react';
 
 export default function AudioPlayer({
   url, name, size, duration, isPlaying, onPlayToggle,
-  onTimeUpdate, onEnded,
+  onTimeUpdate, onEnded, audioRef: externalRef,
 }) {
-  const audioRef = useRef(null);
+  const innerRef = useRef(null);
+  const audioRef = externalRef || innerRef;
 
   const fmt = (s) => {
     if (!s || isNaN(s)) return '0:00';

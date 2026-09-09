@@ -13,7 +13,7 @@ import TrendChart from './TrendChart';
 import RiskExplanation from './RiskExplanation';
 import RecommendationCard from './RecommendationCard';
 
-export default function AnalysisDashboard({ caseData, currentSegment, isPlaying, audioRef }) {
+export default function AnalysisDashboard({ caseData, currentSegment, isPlaying }) {
   const [expandedSeg, setExpandedSeg] = useState(null);
 
   if (!caseData) return null;
