@@ -271,6 +271,7 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             overall_confidence=round(overall_confidence, 2),
             overall_indicators=sorted(all_indicators),
             risk_explanation=risk_result["explanation"],
+            svi_breakdown=svi_result.get("svi_breakdown", {}),
             recommendation=recommendation,
             mode=stt.provider_name(),
             analyzed_at=_now_iso(),
@@ -413,6 +414,7 @@ def _build_demo_case() -> AnalysisResponse:
         indicators=sorted(all_indicators),
         confidence=overall_confidence,
         immediate_safety=immediate_safety,
+        svi_breakdown=svi_result.get("svi_breakdown", {}),
     )
 
     recommendation = get_recommendation(
@@ -451,6 +453,7 @@ def _build_demo_case() -> AnalysisResponse:
         overall_confidence=round(overall_confidence, 2),
         overall_indicators=sorted(all_indicators),
         risk_explanation=risk_result["explanation"],
+        svi_breakdown=svi_result.get("svi_breakdown", {}),
         recommendation=recommendation,
         mode="demo",
         analyzed_at=_now_iso(),

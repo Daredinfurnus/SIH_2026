@@ -52,6 +52,7 @@ class RiskService:
         confidence: float,
         immediate_safety: bool,
         segment_risks: list[str] | None = None,
+        svi_breakdown: dict | None = None,
     ) -> dict[str, Any]:
         """Compute an assistive risk level with explanation.
 
@@ -97,7 +98,8 @@ class RiskService:
         # 5. Explanation + contributing indicators
         # ---------------------------------------------------------------
         explanation = self._explain(
-            level, base_risk, effective_risk, indicators, immediate_safety, confidence
+            level, base_risk, effective_risk, indicators, immediate_safety, confidence,
+            svi_breakdown=svi_breakdown,
         )
         contributing = self._contributing_indicators(indicators, level)
 
@@ -122,19 +124,36 @@ class RiskService:
         indicators: list[str],
         immediate_safety: bool,
         confidence: float,
+        svi_breakdown: dict | None = None,
     ) -> list[str]:
         parts: list[str] = []
+
+        bd = svi_breakdown or {}
+        stress_c = bd.get("stress_component", 0)
+        distress_c = bd.get("distress_component", 0)
+        safety_c = bd.get("safety_component", 0)
+        context_c = bd.get("context_component", 0)
 
         if immediate_safety:
             parts.append("Immediate safety indicators detected — trained human review required.")
 
         if level == RiskLevel.LOW:
-            parts.append("Low stress and distress indicators in the conversation.")
+            parts.append(f"SVI score {effective_risk}/100 — below the 25-point Moderate threshold.")
+            parts.append(f"Stress component {stress_c}, distress component {distress_c} — both in the low range.")
+            if context_c > 0:
+                parts.append(f"Context indicators contributed {context_c} points.")
             parts.append("No immediate safety concerns detected.")
         elif level == RiskLevel.MODERATE:
-            parts.append("Moderate stress and distress indicators present.")
+            parts.append(f"SVI score {effective_risk}/100 — in the 25-49 Moderate band.")
+            parts.append(f"Stress component {stress_c}, distress component {distress_c} — elevated but below the 50-point High threshold.")
+            if context_c > 0:
+                parts.append(f"Context indicators contributed {context_c} points.")
             parts.append("Conversation shows elevated concern but no immediate safety signals.")
         elif level == RiskLevel.HIGH:
+            parts.append(f"SVI score {effective_risk}/100 — at or above the 50-point High threshold.")
+            parts.append(f"Distress component {distress_c} is the primary driver, with stress component {stress_c}.")
+            if context_c > 0:
+                parts.append(f"Context indicators contributed {context_c} points.")
             parts.append("Elevated distress indicators across the conversation.")
             parts.append("Fear-related and threat-related context detected.")
             if any("helplessness" in i.lower() for i in indicators):
@@ -142,6 +161,10 @@ class RiskService:
             if any("isolation" in i.lower() for i in indicators):
                 parts.append("Isolation indicators present.")
         else:  # CRITICAL
+            parts.append(f"SVI score {effective_risk}/100 — at or above the 75-point Critical threshold.")
+            parts.append(f"Distress component {distress_c} and stress component {stress_c} both elevated.")
+            if context_c > 0:
+                parts.append(f"Context indicators contributed {context_c} points.")
             parts.append("High distress indicators with multiple stress signals.")
             parts.append("Fear, helplessness, and threat-related context detected.")
             if any("hopelessness" in i.lower() for i in indicators):
@@ -149,10 +172,7 @@ class RiskService:
             parts.append("Trained human review required immediately.")
 
         if confidence < 0.6:
-            parts.append(
-                f"Assessment confidence is {int(confidence * 100)}% — "
-                "interpret with caution and seek additional context."
-            )
+            parts.append(f"Assessment confidence is {int(confidence * 100)}% — interpret with caution and seek additional context.")
 
         return parts
 
@@ -189,10 +209,12 @@ def compute_risk(
     confidence: float,
     immediate_safety: bool,
     segment_risks: list[str] | None = None,
+    svi_breakdown: dict | None = None,
 ) -> dict[str, Any]:
     """Convenience wrapper preserving legacy call shape."""
     svc = RiskService()
     return svc.assess(
         svi_score, overall_stress, overall_distress, indicators,
         confidence, immediate_safety, segment_risks,
+        svi_breakdown=svi_breakdown,
     )

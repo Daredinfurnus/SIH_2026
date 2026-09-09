@@ -83,6 +83,44 @@ export default function FinalReport({ caseData, onPrint }) {
       </div>
 
       <div className="report-section">
+        <h4>SVI Composite Breakdown — For Counsellor / NHAA Operator Review</h4>
+        <p style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8, fontStyle: 'italic' }}>
+          The following breakdown shows how the composite SVI score was calculated internally.
+          This is assistive context for the trained human reviewer and not shown to the caller.
+        </p>
+        <div className="report-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+          <div className="report-item" style={{ background: 'rgba(139,156,245,0.06)', borderColor: 'rgba(139,156,245,0.15)' }}>
+            <div className="label" style={{ color: '#8B9CF5' }}>Stress Component</div>
+            <div className="value" style={{ color: '#8B9CF5' }}>{caseData.svi_breakdown?.stress_component ?? '—'}</div>
+            <div className="text-xs text-dim" style={{ marginTop: 2 }}>Weight: 30%</div>
+          </div>
+          <div className="report-item" style={{ background: 'rgba(253,191,36,0.06)', borderColor: 'rgba(253,191,36,0.15)' }}>
+            <div className="label" style={{ color: '#FBBF24' }}>Distress Component</div>
+            <div className="value" style={{ color: '#FBBF24' }}>{caseData.svi_breakdown?.distress_component ?? '—'}</div>
+            <div className="text-xs text-dim" style={{ marginTop: 2 }}>Weight: 35%</div>
+          </div>
+          <div className="report-item" style={{ background: 'rgba(52,211,153,0.06)', borderColor: 'rgba(52,211,153,0.15)' }}>
+            <div className="label" style={{ color: '#34D399' }}>Safety Component</div>
+            <div className="value" style={{ color: '#34D399' }}>{caseData.svi_breakdown?.safety_component ?? '—'}</div>
+            <div className="text-xs text-dim" style={{ marginTop: 2 }}>Weight: 20%</div>
+          </div>
+          <div className="report-item" style={{ background: 'rgba(248,113,113,0.06)', borderColor: 'rgba(248,113,113,0.15)' }}>
+            <div className="label" style={{ color: '#F87171' }}>Context Component</div>
+            <div className="value" style={{ color: '#F87171' }}>{caseData.svi_breakdown?.context_component ?? '—'}</div>
+            <div className="text-xs text-dim" style={{ marginTop: 2 }}>Weight: 15%</div>
+          </div>
+        </div>
+        <div className="flex gap-4 mt-2 flex-wrap">
+          <div className="text-xs text-dim">Segments analyzed: <strong>{caseData.svi_breakdown?.segment_count ?? '—'}</strong></div>
+          {caseData.svi_breakdown?.immediate_safety && (
+            <div className="text-xs" style={{ color: '#F87171', fontWeight: 600 }}>
+              Immediate safety indicator detected in composite
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="report-section">
         <h4>Risk Explanation</h4>
         <ul>
           {caseData.risk_explanation.map((exp, i) => (

@@ -67,6 +67,15 @@ class TranscriptSegment(BaseModel):
 # Full analysis response
 # ===========================================================================
 
+class SviBreakdown(BaseModel):
+    stress_component: int = 0
+    distress_component: int = 0
+    safety_component: int = 0
+    context_component: int = 0
+    segment_count: int = 0
+    immediate_safety: bool = False
+
+
 class AnalysisResponse(BaseModel):
     case_id: str
     file_name: str
@@ -80,6 +89,7 @@ class AnalysisResponse(BaseModel):
     overall_confidence: float = Field(..., ge=0.0, le=1.0)
     overall_indicators: list[str] = Field(default_factory=list)
     risk_explanation: list[str] = Field(default_factory=list)
+    svi_breakdown: SviBreakdown = Field(default_factory=SviBreakdown)
     recommendation: str
     mode: str = "demo"
     disclaimer: str = (

@@ -154,7 +154,6 @@ _DEMO_ANALYSIS = [
     },
 ]
 
-
 class SpeechToTextService:
     """Configurable STT provider wrapper."""
 
@@ -279,13 +278,20 @@ class SpeechToTextService:
                     else self._demo_transcript(file_path, language)
                 )
 
+                        # ── Adaptive merge: 15s–20s per segment, sentence/paragraph aware ──
             # Merge short segments so each displayed segment is at least
-            # MIN_SEGMENT_SECONDS long. Sentences under the threshold get
-            # merged with following speech until the threshold is reached.
-            MIN_SEGMENT_SECONDS = 5.0
+            # MIN_SEGMENT_SECONDS long. Flush on sentence boundary (. ! ? : ;),
+            # paragraph break, or when the buffer reaches the minimum duration.
+            # 22.0s hard cap prevents a single segment from growing too large.
+
+            MIN_SEGMENT_SECONDS = 15.0
+            HARD_CAP_SECONDS = 22.0
             SENTENCE_END = {".", "!", "?", ":", ";"}
 
-            merged = []
+            def _is_new_paragraph(text: str) -> bool:
+                return "\n\n" in text or "\r\n\r\n" in text
+
+            merged: list[dict[str, float | str]] = []
             buf_start = raw_segments[0]["start"]
             buf_end = raw_segments[0]["end"]
             buf_text = raw_segments[0]["text"]
@@ -298,41 +304,36 @@ class SpeechToTextService:
                 buf_duration = buf_end - buf_start
                 buf_text_end = buf_text.rstrip()
 
-                # Flush if we've reached the minimum duration.
-                if buf_duration >= MIN_SEGMENT_SECONDS:
+                flush = False
+                if buf_text_end.endswith(tuple(SENTENCE_END)):
+                    flush = True
+                if not flush and _is_new_paragraph(buf_text):
+                    flush = True
+                if not flush and buf_duration >= MIN_SEGMENT_SECONDS:
+                    flush = True
+                if not flush and (seg_end - buf_start) >= HARD_CAP_SECONDS:
+                    flush = True
+
+                if flush:
                     merged.append({
                         "start": round(buf_start, 2),
                         "end": round(buf_end, 2),
                         "text": buf_text_end,
+                        "speaker": "caller",
                     })
                     buf_start = seg_start
                     buf_end = seg_end
                     buf_text = seg_text
                 else:
-                    # Buffer is still too short — keep accumulating.
-                    # Only flush early if the buffer ends at a clear sentence
-                    # boundary AND the next segment would push us over the
-                    # threshold on its own.
-                    next_alone_long_enough = (seg_end - seg_start) >= MIN_SEGMENT_SECONDS
-                    if buf_duration >= 4.0 and buf_text_end.endswith((".", "!", "?")) and next_alone_long_enough:
-                        merged.append({
-                            "start": round(buf_start, 2),
-                            "end": round(buf_end, 2),
-                            "text": buf_text_end,
-                        })
-                        buf_start = seg_start
-                        buf_end = seg_end
-                        buf_text = seg_text
-                    else:
-                        buf_end = seg_end
-                        buf_text = f"{buf_text} {seg_text}"
+                    buf_end = seg_end
+                    buf_text = f"{buf_text} {seg_text}"
 
-            # Flush remaining buffer.
             if buf_text.strip():
                 merged.append({
                     "start": round(buf_start, 2),
                     "end": round(buf_end, 2),
                     "text": buf_text.strip(),
+                    "speaker": "caller",
                 })
 
             if not merged:
@@ -348,7 +349,7 @@ class SpeechToTextService:
                     "start": seg["start"],
                     "end": seg["end"],
                     "text": seg["text"],
-                    "speaker": "caller",
+                    "speaker": seg.get("speaker", "victim"),
                     "emotion": "Neutral",
                 })
 

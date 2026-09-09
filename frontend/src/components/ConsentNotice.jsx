@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shield, AlertTriangle } from 'lucide-react';
+import { Shield, AlertTriangle, CheckCircle2 } from 'lucide-react';
 
 export default function ConsentNotice({ acknowledged, onAcknowledge, onBack }) {
   return (
