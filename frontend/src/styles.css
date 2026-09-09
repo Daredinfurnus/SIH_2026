@@ -47,9 +47,9 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   background:
-    radial-gradient(ellipse at 20% 0%, rgba(108, 92, 231, 0.05) 0%, transparent 55%),
-    radial-gradient(ellipse at 80% 100%, rgba(0, 206, 201, 0.03) 0%, transparent 55%),
-    var(--bg);
+    radial-gradient(ellipse at 20% 0%, rgba(108, 92, 231, 0.08) 0%, transparent 55%),
+    radial-gradient(ellipse at 80% 100%, rgba(0, 206, 201, 0.05) 0%, transparent 55%),
+    #0F1117;
 }
 
 /* ===== Header ===== */
@@ -84,12 +84,13 @@ html, body, #root {
 .header-title h1 {
   font-size: 15px;
   font-weight: 700;
-  color: var(--foreground);
+  color: #FFFFFF;
   letter-spacing: -0.2px;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
 .header-title .subtitle {
   font-size: 11px;
-  color: var(--muted-foreground);
+  color: #B8C2D4;
   margin-top: 1px;
 }
 .header-meta {
@@ -107,20 +108,21 @@ html, body, #root {
   padding: 4px 10px;
   border-radius: 20px;
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.6px;
   border: 1px solid transparent;
 }
 .badge-hil {
-  background: rgba(0, 206, 201, 0.1);
-  color: var(--green);
-  border-color: rgba(0, 206, 201, 0.2);
+  background: rgba(0, 206, 201, 0.15);
+  color: #00FFC2;
+  border-color: rgba(0, 206, 201, 0.3);
+  text-shadow: 0 0 8px rgba(0, 206, 201, 0.3);
 }
 .badge-ps {
-  background: rgba(108, 92, 231, 0.1);
-  color: #a29bfe;
-  border-color: rgba(108, 92, 231, 0.2);
+  background: rgba(108, 92, 231, 0.15);
+  color: #C4B5FD;
+  border-color: rgba(108, 92, 231, 0.3);
 }
 
 /* ===== Main ===== */
