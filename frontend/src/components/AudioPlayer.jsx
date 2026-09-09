@@ -1,13 +1,11 @@
-import React, { useImperativeHandle, forwardRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { Play, Square, Clock, FileAudio } from 'lucide-react';
 
-const AudioPlayer = forwardRef(({
+export default function AudioPlayer({
   url, name, size, duration, isPlaying, onPlayToggle,
-  onTimeUpdate, onEnded, audioRef
-}, ref) => {
-  useImperativeHandle(ref, () => ({
-    get current() { return audioRef?.current; }
-  }), [audioRef]);
+  onTimeUpdate, onEnded,
+}) {
+  const audioRef = useRef(null);
 
   const fmt = (s) => {
     if (!s || isNaN(s)) return '0:00';
@@ -17,10 +15,21 @@ const AudioPlayer = forwardRef(({
   };
 
   const fmtSize = (bytes) => {
+    if (!bytes) return '—';
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
+
+  const togglePlay = useCallback(() => {
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+    } else {
+      audioRef.current.play().catch(() => {});
+    }
+    onPlayToggle();
+  }, [isPlaying, onPlayToggle]);
 
   return (
     <div className="card" style={{ marginTop: 12 }}>
@@ -28,7 +37,7 @@ const AudioPlayer = forwardRef(({
       <div className="audio-player">
         <button
           className="btn btn-secondary btn-sm"
-          onClick={onPlayToggle}
+          onClick={togglePlay}
           disabled={!url}
           style={{ minWidth: 36 }}
         >
@@ -39,7 +48,7 @@ const AudioPlayer = forwardRef(({
             <audio
               ref={audioRef}
               src={url}
-              onTimeUpdate={onTimeUpdate}
+              onTimeUpdate={(e) => onTimeUpdate(e.currentTarget.currentTime)}
               onEnded={onEnded}
               preload="metadata"
             />
@@ -48,7 +57,7 @@ const AudioPlayer = forwardRef(({
               <span style={{ margin: '0 6px' }}>·</span>
               {duration ? fmt(duration) : '—'}
               <span style={{ margin: '0 6px' }}>·</span>
-              {size ? fmtSize(size) : ''}
+              {fmtSize(size)}
             </span>
           </>
         ) : (
@@ -63,7 +72,4 @@ const AudioPlayer = forwardRef(({
       )}
     </div>
   );
-});
-
-AudioPlayer.displayName = 'AudioPlayer';
-export default AudioPlayer;
+}

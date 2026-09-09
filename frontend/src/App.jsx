@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Monitor,
   Upload,
@@ -58,9 +58,9 @@ export default function App() {
   }, []);
 
   // ---- audio time tracking ---------------------------------------------
-  const handleTimeUpdate = useCallback(() => {
-    if (!audioRef.current || !caseData) return;
-    const t = audioRef.current.currentTime;
+  const handleTimeUpdate = useCallback((currentTime) => {
+    if (!caseData) return;
+    const t = currentTime;
     const segs = caseData.transcript;
     for (let i = 0; i < segs.length; i++) {
       if (t >= segs[i].start && t < segs[i].end) {
@@ -123,28 +123,24 @@ export default function App() {
   // ---- demo mode -------------------------------------------------------
   const startDemo = async () => {
     setError(null);
-    setIsAnalyzing(true);
-    setMode('analyzing');
-    setProgress(0);
+    setFile(null);
+    setAudioUrl(null);
+    setAudioName('');
+    setAudioSize(0);
+    setAudioDuration(0);
+    setCaseData(null);
+    setActiveTab('dashboard');
     setCurrentSegment(0);
-    try {
-      const data = await getDemoAnalysis();
-      setCaseData(data);
-      setMode('done');
-      setAudioDuration(data.duration_seconds || 120);
-      setAudioUrl(null);
-      setFile(null);
-    } catch (err) {
-      setError(err.message || 'Failed to load demo analysis.');
-      setMode('idle');
-    } finally {
-      setIsAnalyzing(false);
-    }
+    setIsPlaying(false);
+    setProgress(0);
+    if (progressInterval.current) clearInterval(progressInterval.current);
+    // Require consent before demo analysis, same as uploaded file flow.
+    setConsentAck(false);
+    setMode('uploaded');
   };
 
-  // ---- analyze uploaded file -------------------------------------------
+  // ---- analyze uploaded file or demo -----------------------------------
   const startAnalysis = async () => {
-    if (!file) return;
     if (!consentAck) {
       setError('Please acknowledge the consent notice before analysis.');
       return;
@@ -155,10 +151,20 @@ export default function App() {
     setProgress(0);
     setCurrentSegment(0);
     try {
-      const data = await uploadAndAnalyze(file);
+      let data;
+      if (file) {
+        // Real file upload
+        data = await uploadAndAnalyze(file);
+        setAudioDuration(data.duration_seconds || 0);
+      } else {
+        // Demo mode — no file uploaded, load deterministic demo
+        data = await getDemoAnalysis();
+        setAudioDuration(data.duration_seconds || 120);
+        setAudioUrl(null);
+        setFile(null);
+      }
       setCaseData(data);
       setMode('done');
-      setAudioDuration(data.duration_seconds || 0);
     } catch (err) {
       setError(err.message || 'Analysis failed. Please try again.');
       setMode('uploaded');
@@ -319,8 +325,8 @@ export default function App() {
           </>
         )}
 
-        {/* UPLOADED — file ready, waiting for consent + analysis */}
-        {mode === 'uploaded' && file && (
+        {/* UPLOADED — file ready or demo mode, waiting for consent + analysis */}
+        {mode === 'uploaded' && (
           <>
             <ConsentNotice
               acknowledged={consentAck}
@@ -333,20 +339,10 @@ export default function App() {
               name={audioName}
               size={audioSize}
               duration={audioDuration}
-              ref={audioRef}
               onTimeUpdate={handleTimeUpdate}
               onEnded={handleEnded}
               isPlaying={isPlaying}
-              onPlayToggle={() => {
-                if (!audioRef.current) return;
-                if (isPlaying) {
-                  audioRef.current.pause();
-                  setIsPlaying(false);
-                } else {
-                  audioRef.current.play().catch(() => {});
-                  setIsPlaying(true);
-                }
-              }}
+              onPlayToggle={() => setIsPlaying(!isPlaying)}
             />
 
             <div className="flex gap-3 mt-3 flex-wrap">
