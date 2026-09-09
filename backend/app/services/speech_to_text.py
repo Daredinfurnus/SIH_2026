@@ -175,12 +175,24 @@ class SpeechToTextService:
         file (not the judge-facing /api/demo endpoint). In that case we return
         honest placeholder segments rather than a fabricated crisis narrative,
         because we cannot actually transcribe without a real ASR provider.
+
+        If faster-whisper is installed, the "demo" provider will use it as the
+        real engine (with placeholder fallback on failure).  Otherwise it returns
+        pure placeholder/demo segments.
         """
         if self.provider == "demo":
+            # When faster-whisper is available, use it as the real engine even
+            # though the configured provider is "demo".  This gives us real
+            # transcription with zero config changes.
+            try:
+                from faster_whisper import WhisperModel  # noqa: F401
+                return self._whisper_transcript(file_path, language, real_upload)
+            except ImportError:
+                pass
             if real_upload:
                 return self._placeholder_transcript(file_path, language)
             return self._demo_transcript(file_path, language)
-        return self._real_or_fallback(file_path, language)
+        return self._real_or_fallback(file_path, language, real_upload=real_upload)
 
     def provider_name(self) -> str:
         return self.provider
@@ -222,36 +234,118 @@ class SpeechToTextService:
             seg["indicators"] = ["neutral speech"]
         return segs
 
+    def _whisper_transcript(
+        self, file_path: str, language: str, real_upload: bool
+    ) -> list[dict[str, Any]]:
+        """Transcribe using faster-whisper (base model, CPU, int8).
+
+        Falls back to placeholder (real uploads) or demo narrative
+        (judge endpoint) when the model cannot be loaded or transcription
+        returns no segments.
+        """
+        model_size = "base"
+        try:
+            from faster_whisper import WhisperModel
+            model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        except Exception:
+            return (
+                self._placeholder_transcript(file_path, language)
+                if real_upload
+                else self._demo_transcript(file_path, language)
+            )
+
+        try:
+            segments_gen, _info = model.transcribe(
+                file_path,
+                language=None if language == "auto" else language,
+                beam_size=5,
+                word_timestamps=False,
+            )
+            segments = []
+            for seg in segments_gen:
+                text = seg.text.strip()
+                if not text:
+                    continue
+                segments.append({
+                    "start": round(seg.start, 2),
+                    "end": round(seg.end, 2),
+                    "text": text,
+                    "speaker": "caller",
+                    "emotion": "Neutral",
+                })
+            if not segments:
+                return (
+                    self._placeholder_transcript(file_path, language)
+                    if real_upload
+                    else self._demo_transcript(file_path, language)
+                )
+            return segments
+        except Exception:
+            return (
+                self._placeholder_transcript(file_path, language)
+                if real_upload
+                else self._demo_transcript(file_path, language)
+            )
+
     # ------------------------------------------------------------------
     # Real provider integration point
     # ------------------------------------------------------------------
 
     def _real_or_fallback(
-        self, file_path: str, language: str
+        self, file_path: str, language: str, real_upload: bool = False
     ) -> list[dict[str, Any]]:
-        """Placeholder for a real STT provider.
+        """Whisper (faster-whisper) based speech-to-text provider.
 
-        When a real provider is wired in, implement the actual call here and
-        return segments in the same shape as the demo provider.  If the real
-        provider is unavailable (no key, network error, model not present) we
-        fall back to demo so the application keeps working.
+        Uses the ``faster-whisper`` library with the ``base`` model by default.
+        Falls back to placeholder (real uploads) or demo (judge endpoint)
+        when the model cannot be loaded or transcription fails.
+
+        The model is downloaded automatically on first use (~140 MB for ``base``)
+        and cached by HuggingFace Hub.  Subsequent runs reuse the cached model.
         """
-        # TODO: integrate real ASR provider here.
-        # Examples:
-        #   - Whisper (openai-whisper / faster-whisper)
-        #   - Vendor ASR endpoint
-        #   - Indic-language ASR
-        #
-        # The real implementation should:
-        #   1. call the provider
-        #   2. convert its output into the segment shape below
-        #   3. fall back to demo mode when the call fails
-        # For now, even the "real" path falls back to placeholder segments
-        # for real uploads (honest about missing STT) or demo narrative for
-        # the judge-facing demo endpoint.
-        if real_upload:
-            return self._placeholder_transcript(file_path, language)
-        return self._demo_transcript(file_path, language)
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError:
+            if real_upload:
+                return self._placeholder_transcript(file_path, language)
+            return self._demo_transcript(file_path, language)
+
+        model_size = "base"
+        try:
+            model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        except Exception:
+            if real_upload:
+                return self._placeholder_transcript(file_path, language)
+            return self._demo_transcript(file_path, language)
+
+        try:
+            segments_gen, _info = model.transcribe(
+                file_path,
+                language=None if language == "auto" else language,
+                beam_size=5,
+                word_timestamps=False,
+            )
+            segments = []
+            for seg in segments_gen:
+                text = seg.text.strip()
+                if not text:
+                    continue
+                segments.append({
+                    "start": round(seg.start, 2),
+                    "end": round(seg.end, 2),
+                    "text": text,
+                    "speaker": "caller",
+                    "emotion": "Neutral",
+                })
+            if not segments:
+                if real_upload:
+                    return self._placeholder_transcript(file_path, language)
+                return self._demo_transcript(file_path, language)
+            return segments
+        except Exception:
+            if real_upload:
+                return self._placeholder_transcript(file_path, language)
+            return self._demo_transcript(file_path, language)
 
     # ------------------------------------------------------------------
     # Helpers
