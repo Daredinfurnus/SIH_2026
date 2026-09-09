@@ -261,24 +261,97 @@ class SpeechToTextService:
                 beam_size=5,
                 word_timestamps=False,
             )
-            segments = []
+            raw_segments = []
             for seg in segments_gen:
                 text = seg.text.strip()
                 if not text:
                     continue
-                segments.append({
+                raw_segments.append({
                     "start": round(seg.start, 2),
                     "end": round(seg.end, 2),
                     "text": text,
-                    "speaker": "caller",
-                    "emotion": "Neutral",
                 })
-            if not segments:
+
+            if not raw_segments:
                 return (
                     self._placeholder_transcript(file_path, language)
                     if real_upload
                     else self._demo_transcript(file_path, language)
                 )
+
+            # Merge short segments so each displayed segment is at least
+            # MIN_SEGMENT_SECONDS long. Sentences under the threshold get
+            # merged with following speech until the threshold is reached.
+            MIN_SEGMENT_SECONDS = 5.0
+            SENTENCE_END = {".", "!", "?", ":", ";"}
+
+            merged = []
+            buf_start = raw_segments[0]["start"]
+            buf_end = raw_segments[0]["end"]
+            buf_text = raw_segments[0]["text"]
+
+            for seg in raw_segments[1:]:
+                seg_start = seg["start"]
+                seg_end = seg["end"]
+                seg_text = seg["text"]
+
+                buf_duration = buf_end - buf_start
+                buf_text_end = buf_text.rstrip()
+
+                # Flush if we've reached the minimum duration.
+                if buf_duration >= MIN_SEGMENT_SECONDS:
+                    merged.append({
+                        "start": round(buf_start, 2),
+                        "end": round(buf_end, 2),
+                        "text": buf_text_end,
+                    })
+                    buf_start = seg_start
+                    buf_end = seg_end
+                    buf_text = seg_text
+                else:
+                    # Buffer is still too short — keep accumulating.
+                    # Only flush early if the buffer ends at a clear sentence
+                    # boundary AND the next segment would push us over the
+                    # threshold on its own.
+                    next_alone_long_enough = (seg_end - seg_start) >= MIN_SEGMENT_SECONDS
+                    if buf_duration >= 4.0 and buf_text_end.endswith((".", "!", "?")) and next_alone_long_enough:
+                        merged.append({
+                            "start": round(buf_start, 2),
+                            "end": round(buf_end, 2),
+                            "text": buf_text_end,
+                        })
+                        buf_start = seg_start
+                        buf_end = seg_end
+                        buf_text = seg_text
+                    else:
+                        buf_end = seg_end
+                        buf_text = f"{buf_text} {seg_text}"
+
+            # Flush remaining buffer.
+            if buf_text.strip():
+                merged.append({
+                    "start": round(buf_start, 2),
+                    "end": round(buf_end, 2),
+                    "text": buf_text.strip(),
+                })
+
+            if not merged:
+                return (
+                    self._placeholder_transcript(file_path, language)
+                    if real_upload
+                    else self._demo_transcript(file_path, language)
+                )
+
+            segments = []
+            for seg in merged:
+                segments.append({
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "text": seg["text"],
+                    "speaker": "caller",
+                    "emotion": "Neutral",
+                })
+
             return segments
         except Exception:
             return (
