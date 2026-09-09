@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   ReferenceLine, Legend
@@ -15,6 +15,7 @@ import RecommendationCard from './RecommendationCard';
 
 export default function AnalysisDashboard({ caseData, currentSegment, isPlaying }) {
   const [expandedSeg, setExpandedSeg] = useState(null);
+  const audioRef = useRef(null);
 
   if (!caseData) return null;
 
