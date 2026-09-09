@@ -129,7 +129,7 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
 
         # ---- STT --------------------------------------------------------
         stt = SpeechToTextService()
-        raw_segments = stt.transcribe(safe_path, language="en")
+        raw_segments = stt.transcribe(safe_path, language="en", real_upload=True)
 
         if not raw_segments:
             return JSONResponse(

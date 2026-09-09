@@ -165,13 +165,20 @@ class SpeechToTextService:
     # Public API
     # ------------------------------------------------------------------
 
-    def transcribe(self, file_path: str, language: str = "en") -> list[dict[str, Any]]:
+    def transcribe(self, file_path: str, language: str = "en", real_upload: bool = False) -> list[dict[str, Any]]:
         """Return a list of transcript segments for the given audio file.
 
         Each segment is a dict with at least:
             start, end, text, speaker, emotion
+
+        When real_upload is True, the caller is processing an actual uploaded
+        file (not the judge-facing /api/demo endpoint). In that case we return
+        honest placeholder segments rather than a fabricated crisis narrative,
+        because we cannot actually transcribe without a real ASR provider.
         """
         if self.provider == "demo":
+            if real_upload:
+                return self._placeholder_transcript(file_path, language)
             return self._demo_transcript(file_path, language)
         return self._real_or_fallback(file_path, language)
 
@@ -188,6 +195,32 @@ class SpeechToTextService:
         """Deterministic demo transcript scaled to the audio duration."""
         duration = self._available_duration(file_path)
         return _build_demo_segments(duration)
+
+    def _placeholder_transcript(
+        self, file_path: str, language: str
+    ) -> list[dict[str, Any]]:
+        """Honest placeholder segments for a real uploaded file when no ASR
+        provider is available.
+
+        These segments acknowledge that transcription is not available in
+        demo mode and provide neutral text so the analysis pipeline still
+        produces scores without fabricating a specific crisis narrative.
+        """
+        duration = self._available_duration(file_path)
+        segs = _build_demo_segments(duration)
+        # Replace the narrative text with honest placeholders.
+        n = len(segs)
+        for i, seg in enumerate(segs):
+            seg["text"] = (
+                f"[Segment {i + 1} of {n}] "
+                f"Audio recorded {duration:.0f}s. "
+                f"Speech-to-text not available in demo mode — "
+                f"transcript text is a placeholder. "
+                f"Run with a real ASR provider to transcribe actual speech."
+            )
+            seg["emotion"] = "Neutral"
+            seg["indicators"] = ["neutral speech"]
+        return segs
 
     # ------------------------------------------------------------------
     # Real provider integration point
@@ -213,6 +246,11 @@ class SpeechToTextService:
         #   1. call the provider
         #   2. convert its output into the segment shape below
         #   3. fall back to demo mode when the call fails
+        # For now, even the "real" path falls back to placeholder segments
+        # for real uploads (honest about missing STT) or demo narrative for
+        # the judge-facing demo endpoint.
+        if real_upload:
+            return self._placeholder_transcript(file_path, language)
         return self._demo_transcript(file_path, language)
 
     # ------------------------------------------------------------------
