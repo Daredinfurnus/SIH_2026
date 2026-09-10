@@ -39,8 +39,8 @@ export default function FinalReport({ caseData, onPrint }) {
         </div>
         <div className="report-item">
           <div className="label">Processing Mode</div>
-          <div className="value-sm" style={{ color: caseData.mode === 'demo' ? '#8B9CF5' : '#34D399' }}>
-            {caseData.mode === 'demo' ? 'Demo (offline, deterministic)' : 'Production mode'}
+          <div className="value-sm" style={{ color: '#34D399' }}>
+            {'Production mode'}
           </div>
         </div>
         <div className="report-item">

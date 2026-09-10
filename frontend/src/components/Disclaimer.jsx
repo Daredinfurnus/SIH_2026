@@ -16,7 +16,7 @@ export default function Disclaimer() {
           </p>
           <p style={{ marginBottom: 6 }}>
             AI output should be interpreted together with human judgement and available case context.
-            Prototype thresholds are demonstration values, not clinical thresholds.
+            Prototype thresholds are illustrative reference values, not clinical thresholds.
           </p>
           <p>
             <AlertTriangle size={12} style={{ marginRight: 4, verticalAlign: 'middle', color: '#F87171' }} />
@@ -30,7 +30,6 @@ export default function Disclaimer() {
         <span className="flex items-center gap-1"><Shield size={11} /> Privacy-first · local/temp processing</span>
         <span className="flex items-center gap-1"><UserCheck size={11} /> Human-in-the-loop</span>
         <span className="flex items-center gap-1"><Brain size={11} /> Prototype analysis engine</span>
-        <span className="flex items-center gap-1"><WifiOff size={11} /> Demo mode works offline</span>
       </div>
     </div>
   );

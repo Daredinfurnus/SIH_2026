@@ -1,6 +1,6 @@
 """
 Speech-to-Text service — faster-whisper (base, CPU, int8) for real uploads.
-Judge-facing /api/demo removed — uploads only, honest placeholder fallback.
+Upload-based pipeline with honest placeholder fallback when ASR is unavailable.
 """
 
 from __future__ import annotations
@@ -170,8 +170,6 @@ class SpeechToTextService:
                 "end": seg["end"],
                 "text": seg["text"],
                 "speaker": seg.get("speaker", "caller"),
-                "emotion": "Neutral",
-                "detected_language": detected_language,
             }
             segments.append(seg_dict)
 
@@ -201,7 +199,6 @@ class SpeechToTextService:
                     f"Run with a real ASR provider to transcribe actual speech."
                 ),
                 "speaker": "caller",
-                "emotion": "Neutral",
             })
         return segments
 

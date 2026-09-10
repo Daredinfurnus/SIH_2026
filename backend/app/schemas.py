@@ -91,7 +91,7 @@ class AnalysisResponse(BaseModel):
     risk_explanation: list[str] = Field(default_factory=list)
     svi_breakdown: SviBreakdown = Field(default_factory=SviBreakdown)
     recommendation: str
-    mode: str = "demo"
+    mode: str = "whisper"
     disclaimer: str = (
         "Assistive risk indicator, not a clinical diagnosis. "
         "High-risk indicators require trained human review."
@@ -108,7 +108,7 @@ class AnalysisResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "traumasense-api"
-    mode: str = "demo"
+    mode: str = "whisper"
 
 
 class ErrorResponse(BaseModel):
@@ -135,7 +135,3 @@ def is_allowed_extension(filename: str) -> bool:
     """Check whether the file extension is in the supported set."""
     ext = os.path.splitext(filename)[1].lower()
     return ext in ALLOWED_EXTENSIONS
-
-
-#Lazy import to avoid circular dependency at module level
-import os

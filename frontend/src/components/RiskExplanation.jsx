@@ -39,6 +39,7 @@ export default function RiskExplanation({ level, score, confidence, explanation,
 
       <div className="disclaimer mt-2" style={{ fontSize: 10 }}>
         Prototype risk thresholds — not clinical thresholds.
+        Assistive indicators — trained human review required for high-risk cases.
       </div>
     </div>
   );

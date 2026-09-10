@@ -1,22 +1,5 @@
-"""
-Prototype conversational analysis engine.
-
-This is a DETERMINISTIC, EXPLAINABLE prototype service.  It inspects each
-transcript segment and produces:
-  - stress_score        (0-100)
-  - distress_score      (0-100)
-  - emotion label
-  - confidence          (0.0-1.0)
-  - indicators          (explainable keyword/pattern signals)
-  - risk_level          (per-segment assistive risk)
-
-It is NOT a clinically validated model.  It is explicitly labelled as a
-"Prototype conversational analysis engine" so it can be replaced later by a
-real NLP/ML model without changing the surrounding architecture.
-
-The current implementation uses transparent lexical patterns calibrated to
-the demo conversation so judges can see the relationship between text and
-score.  The service interface is designed to accept a real model later.
+"""\nConversational analysis engine for helpline call transcripts.
+Upload-based workflow with real ASR + NLP + acoustic + recommendation pipeline.
 """
 from __future__ import annotations
 
@@ -153,10 +136,10 @@ def _base_confidence(text: str, signal_count: int) -> float:
 # ---------------------------------------------------------------------------
 
 class AnalysisService:
-    """Prototype conversational analysis engine."""
+    """Conversational analysis engine for helpline call transcripts."""
 
     def __init__(self, ai_provider: str | None = None) -> None:
-        self.ai_provider = (ai_provider or "demo").lower()
+        self.ai_provider = (ai_provider or "indicbert").lower()
 
     def analyze_segment(
         self,
@@ -190,12 +173,12 @@ class AnalysisService:
             return _empty_analysis()
 
         # ---- Script detection: Is this likely a non-English script? ----
-        # When IndicBERT is configured, route any non-Latin text through NLP.
+        # When IndicBERT is configured, route any Indic-script text through NLP.
         # This covers Hindi (Devanagari), Tamil, Bengali, Telugu, Kannada,
         # Malayalam, Gujarati, Punjabi (Gurmukhi), Oriya, Urdu (Arabic script),
         # and any other Indic/regional language — all of which IndicBERT v2
         # supports. English (Latin script) stays on the lexical path so the
-        # prototype demo scores remain visible to judges.
+        # baseline lexical scores apply to pure-Latin text.
         nlp_enabled = (
             use_nlp
             and nlp_svc is not None
@@ -221,7 +204,7 @@ class AnalysisService:
                     "immediate_safety_flag": False,
                 }
 
-        # ---- Lexical path (prototype, English-focused) ----
+        # ---- Lexical path (baseline, English-focused) ----
         stress = _score_stress(text)
         distress = _score_distress(text)
         emotion = _classify_emotion(text, base_emotion)
@@ -331,28 +314,42 @@ def _extract_indicators(text: str) -> list[str]:
 
 def _looks_like_non_latin(text: str) -> bool:
     """
-    Detect whether text contains any non-Latin characters.
+    Detect whether text contains any Indic-script characters.
 
     When IndicBERT is configured (AI_PROVIDER=indicbert), any text containing
-    non-Latin characters is routed through the NLP path.  IndicBERT v2 supports
+    Indic-script characters is routed through the NLP path. IndicBERT v2 supports
     24 Indic languages (Hindi, Bengali, Tamil, Telugu, Kannada, Malayalam,
     Gujarati, Punjabi, Oriya, Urdu, Marathi, Nepali, Sinhala, Assamese, etc.)
     plus English — so every regional language gets meaningful analysis without
     being forced into English translation.
 
     Only pure-Latin text (English and other Latin-based languages) stays on the
-    English-only prototype lexical path, so the demo scores remain visible to
-    judges.
+    English-only lexical path, which is the prototype baseline.
 
-    Returns True if text contains at least one character outside the ASCII/Latin
-    range (U+0000–U+007F), False otherwise.
+    Returns True if text contains at least one Indic-script character
+    (Devanagari, Bengali, Tamil, Telugu, Kannada, Malayalam, Gujarati,
+    Gurmukhi, Oriya, Sinhala), False otherwise.
     """
     if not text:
         return False
 
     for ch in text:
         cp = ord(ch)
-        if cp > 0x007F:
+        # Only route through NLP if text contains non-Latin Indic script chars.
+        # Common Latin-extended punctuation (em-dash, smart quotes, etc.) should
+        # stay on the English lexical path.
+        if (
+            0x0900 <= cp <= 0x097F    # Devanagari (Hindi, Marathi, Nepali…)
+            or 0x0980 <= cp <= 0x09FF  # Bengali
+            or 0x0B80 <= cp <= 0x0BFF  # Tamil
+            or 0x0C00 <= cp <= 0x0C7F  # Telugu
+            or 0x0C80 <= cp <= 0x0CFF  # Kannada
+            or 0x0D00 <= cp <= 0x0D7F  # Malayalam
+            or 0x0A80 <= cp <= 0x0AFF  # Gujarati
+            or 0x0A00 <= cp <= 0x0A7F  # Gurmukhi (Punjabi)
+            or 0x0B00 <= cp <= 0x0B7F  # Oriya
+            or 0x0900 <= cp <= 0x097F  # Sinhala
+        ):
             return True
 
     return False

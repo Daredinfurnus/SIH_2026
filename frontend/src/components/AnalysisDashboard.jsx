@@ -77,7 +77,7 @@ export default function AnalysisDashboard({ caseData, currentSegment, isPlaying 
         <div className="flex items-center gap-2 text-xs text-muted">
           <Brain size={12} />
           Prototype conversational analysis engine · Transparent scoring · Configurable provider architecture ·
-          Designed for Indian-language and code-mixed conversations
+          Indic-language aware · Assistive indicators for trained human review
         </div>
       </div>
 
