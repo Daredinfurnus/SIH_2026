@@ -34,6 +34,7 @@ from app.services.recommendation_service import get_recommendation
 from app.services.risk_service import compute_risk
 from app.services.svi_service import compute_overall_svi
 from app.services.speech_to_text import SpeechToTextService
+from app.services.emotion_service import get_emotion_service
 from app.utils.validation import validate_upload
 
 api_router = APIRouter()
@@ -116,7 +117,7 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
 
         # ---- STT --------------------------------------------------------
         stt = SpeechToTextService()
-        raw_segments = stt.transcribe(safe_path, language="en", real_upload=True)
+        raw_segments = stt.transcribe(safe_path, language=None, real_upload=True)
 
         if not raw_segments:
             return JSONResponse(
@@ -128,7 +129,9 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             )
 
         # ---- analysis ---------------------------------------------------
-        analysis_svc = AnalysisService()
+        ai_provider = settings.ai_provider
+        analysis_svc = AnalysisService(ai_provider=ai_provider)
+        emotion_svc = get_emotion_service()
         analyzed: list[dict[str, Any]] = []
         immediate_safety = False
         all_indicators: set[str] = set()
@@ -140,7 +143,6 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
 
             stress = result["stress_score"]
             distress = result["distress_score"]
-            emotion = result["emotion"]
             confidence = result["confidence"]
             indicators = result["indicators"]
             safety_flag = result["safety_flag"]
@@ -152,13 +154,23 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             for ind in indicators:
                 all_indicators.add(ind)
 
+            # ---- Emotion analysis (text + acoustic) ----
+            emotion_result = emotion_svc.analyze_segment(
+                text=text,
+                audio_path=safe_path,
+                start_sec=float(seg.get("start", 0)),
+                end_sec=float(seg.get("end", 0)),
+            )
+            emotion_label = emotion_result["emotion"]
+            emotion_confidence = max(emotion_result["text_confidence"], emotion_result["acoustic_confidence"])
+
             # Per-segment risk (assistive, not clinical)
             segment_risk = compute_risk(
                 svi_score=stress,  # use stress as segment-level proxy before SVI
                 overall_stress=stress,
                 overall_distress=distress,
                 indicators=indicators,
-                confidence=confidence,
+                confidence=max(confidence, emotion_confidence),
                 immediate_safety=safety_flag,
             )
 
@@ -170,8 +182,8 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                     "speaker": seg.get("speaker", Speaker.CALLER.value),
                     "stress_score": stress,
                     "distress_score": distress,
-                    "emotion": emotion.value if isinstance(emotion, Emotion) else emotion,
-                    "confidence": confidence,
+                    "emotion": emotion_label,
+                    "confidence": max(confidence, emotion_confidence),
                     "indicators": indicators,
                     "safety_flag": safety_flag,
                     "immediate_safety_flag": immediate_flag,
@@ -180,6 +192,8 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                     else segment_risk["risk_level"],
                     "risk_explanation": segment_risk["explanation"],
                     "svi_score": 0,  # filled in after SVI computation
+                    "emotion_explanation": emotion_result.get("emotion_explanation", []),
+                    "accent_signals": emotion_result.get("accent_signals"),
                 }
             )
 
@@ -241,6 +255,8 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                 svi_score=int(s["svi_score"]),
                 risk_level=RiskLevel(s["risk_level"]) if s["risk_level"] in [e.value for e in RiskLevel] else RiskLevel.MODERATE,
                 risk_explanation=s["risk_explanation"],
+                emotion_explanation=s.get("emotion_explanation", []),
+                accent_signals=s.get("accent_signals"),
             )
             for s in analyzed
         ]
@@ -248,35 +264,34 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         response = AnalysisResponse(
             case_id=case_id,
             file_name=os.path.basename(file.filename),
-            duration_seconds=round(duration, 2) if duration else round(len(contents) / 1_000_000 * 60.0, 2),
+            duration_seconds=duration,
             transcript=transcript,
-            overall_stress_score=overall_stress,
-            overall_distress_score=overall_distress,
-            overall_svi_score=svi_score,
-            overall_risk_score=risk_result["risk_score"],
-            overall_risk_level=risk_result["risk_level"],
-            overall_confidence=round(overall_confidence, 2),
-            overall_indicators=sorted(all_indicators),
+            overall_stress=overall_stress,
+            overall_distress=overall_distress,
+            overall_confidence=overall_confidence,
+            svi_score=int(svi_score),
+            risk_level=risk_result["risk_level"].value
+            if hasattr(risk_result["risk_level"], "value")
+            else risk_result["risk_level"],
             risk_explanation=risk_result["explanation"],
-            svi_breakdown=svi_result.get("svi_breakdown", {}),
             recommendation=recommendation,
-            mode=stt.provider_name(),
+            mode="upload",
             analyzed_at=_now_iso(),
-            immediate_safety_indicators=risk_result["immediate_safety_indicators"],
         )
 
-        # ---- persist in-memory ------------------------------------------
         _case_store[case_id] = response.model_dump()
-
         return response
 
     finally:
-        # ---- cleanup ----------------------------------------------------
-        audio_svc.release(safe_path)
+        # Clean up temp file.
+        try:
+            os.remove(safe_path)
+        except OSError:
+            pass
 
 
 # ===========================================================================
-# Case retrieval
+# Cases
 # ===========================================================================
 
 @api_router.get("/cases/{case_id}", response_model=AnalysisResponse | None)
@@ -289,7 +304,7 @@ def get_case(case_id: str) -> dict[str, Any] | None:
 
 
 # ===========================================================================
-# Internal helpers
+# Helpers
 # ===========================================================================
 
 def _mean_int(values: list[int]) -> int:
@@ -301,4 +316,4 @@ def _mean_int(values: list[int]) -> int:
 def _mean_float(values: list[float]) -> float:
     if not values:
         return 0.0
-    return sum(values) / len(values)
+    return round(sum(values) / len(values), 2)

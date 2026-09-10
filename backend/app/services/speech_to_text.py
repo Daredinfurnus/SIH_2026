@@ -17,7 +17,6 @@ Behaviour:
 - Whisper segments are merged into 15-20s speaker-turn-aware chunks before
   return, so the transcript reads at human paragraph granularity.
 """
-
 from __future__ import annotations
 
 import os
@@ -52,7 +51,6 @@ class SpeechToTextService:
 
         If faster-whisper is installed the service uses it as the real engine.
         """
-
         try:
             from faster_whisper import WhisperModel  # noqa: F401
         except ImportError:
@@ -88,7 +86,7 @@ class SpeechToTextService:
         try:
             segments_gen, _info = model.transcribe(
                 file_path,
-                language=None if language == "auto" else language,
+                language=None,  # auto-detect (solace branch fix — was "en" hardcoded)
                 beam_size=5,
                 word_timestamps=False,
             )
@@ -175,17 +173,24 @@ class SpeechToTextService:
 
             # Build the final segment list with emotion labels set to Neutral
             # (emotion is assigned later by the analysis engine from the text).
+            # Add stress/distress/confidence/indicators if available from the
+            # segment metadata (solace branch: auto-detect language, keep
+            # original-language text in DB).
             segments: list[dict[str, Any]] = []
             for seg in merged:
-                segments.append(
-                    {
-                        "start": seg["start"],
-                        "end": seg["end"],
-                        "text": seg["text"],
-                        "speaker": seg.get("speaker", "caller"),
-                        "emotion": "Neutral",
-                    }
-                )
+                seg_dict: dict[str, Any] = {
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "text": seg["text"],
+                    "speaker": seg.get("speaker", "caller"),
+                    "emotion": "Neutral",
+                }
+                # If Whisper returned per-segment metadata (e.g. language),
+                # preserve it.  Default values for stress/distress/confidence
+                # are filled in by the analysis pipeline.
+                if "language" in seg:
+                    seg_dict["language"] = seg["language"]
+                segments.append(seg_dict)
 
             return segments
 
