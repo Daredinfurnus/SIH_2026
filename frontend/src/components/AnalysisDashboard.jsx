@@ -23,6 +23,27 @@ export default function AnalysisDashboard({ caseData, currentSegment, isPlaying 
 
   return (
     <div>
+      {/* Top row: trend chart + assessment + recommendation (matches reference) */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        {/* Trend chart — full width on narrow, left col on wide */}
+        <div className="card" style={{ gridColumn: '1 / -1' }}>
+          <div className="section-title"><TrendingUp size={13} /> Trend Analysis</div>
+          <TrendChart segments={segs} />
+        </div>
+
+        {/* Why this assessment? */}
+        <RiskExplanation
+          level={caseData.overall_risk_level}
+          score={caseData.overall_risk_score}
+          confidence={caseData.overall_confidence}
+          explanation={caseData.risk_explanation}
+          safety={caseData.immediate_safety_indicators}
+        />
+
+        {/* Assistive recommendation */}
+        <RecommendationCard recommendation={caseData.recommendation} />
+      </div>
+
       {/* Score overview row */}
       <div className="grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 12 }}>
         <ScoreCard
@@ -120,24 +141,6 @@ export default function AnalysisDashboard({ caseData, currentSegment, isPlaying 
             </div>
           )}
         </div>
-      </div>
-
-      {/* Trend chart */}
-      <div className="card" style={{ marginBottom: 12 }}>
-        <div className="section-title"><TrendingUp size={13} /> Trend Analysis</div>
-        <TrendChart segments={segs} />
-      </div>
-
-      {/* Risk explanation + recommendation */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <RiskExplanation
-          level={caseData.overall_risk_level}
-          score={caseData.overall_risk_score}
-          confidence={caseData.overall_confidence}
-          explanation={caseData.risk_explanation}
-          safety={caseData.immediate_safety_indicators}
-        />
-        <RecommendationCard recommendation={caseData.recommendation} />
       </div>
 
       <div className="disclaimer mt-3">
