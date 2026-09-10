@@ -18,10 +18,6 @@ export function healthCheck() {
   return request('/health');
 }
 
-export function getDemoAnalysis() {
-  return request('/demo');
-}
-
 export function uploadAndAnalyze(file) {
   const form = new FormData();
   form.append('file', file);
