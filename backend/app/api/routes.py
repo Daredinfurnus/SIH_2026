@@ -12,6 +12,8 @@ import os
 import time
 import uuid
 import logging
+
+logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,7 @@ from app.schemas import (
     HealthResponse,
     RiskLevel,
     Speaker,
+    SviBreakdown,
     TranscriptSegment,
 )
 from app.services.analysis_service import AnalysisService
@@ -280,16 +283,34 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             file_name=os.path.basename(file.filename),
             duration_seconds=duration,
             transcript=transcript,
-            overall_stress=overall_stress,
-            overall_distress=overall_distress,
-            overall_confidence=overall_confidence,
-            svi_score=int(svi_score),
-            risk_level=risk_result["risk_level"].value
+            overall_stress_score=overall_stress,
+            overall_distress_score=overall_distress,
+            overall_svi_score=int(svi_score),
+            overall_risk_score=risk_result.get("risk_score", risk_result.get("svi_score", svi_score)),
+            overall_risk_level=risk_result["risk_level"]
             if hasattr(risk_result["risk_level"], "value")
-            else risk_result["risk_level"],
+            else RiskLevel(risk_result["risk_level"])
+            if risk_result["risk_level"] in [e.value for e in RiskLevel]
+            else RiskLevel.MODERATE,
+            overall_confidence=overall_confidence,
+            overall_indicators=sorted(all_indicators),
             risk_explanation=risk_result["explanation"],
-            recommendation=recommendation,
+            svi_breakdown=SviBreakdown(
+                stress_component=overall_stress,
+                distress_component=overall_distress,
+                safety_component=0,
+                context_component=0,
+                segment_count=len(analyzed),
+                immediate_safety=immediate_safety,
+            ),
+            recommendation=recommendation if isinstance(recommendation, str) else str(recommendation),
             mode="upload",
+            disclaimer=(
+                "Assistive risk indicator, not a clinical diagnosis. "
+                "High-risk indicators require trained human review."
+            ),
+            immediate_safety_indicators=immediate_safety,
+            language="en",
             analyzed_at=_now_iso(),
         )
 

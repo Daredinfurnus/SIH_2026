@@ -6,6 +6,18 @@ Backend application root.
 """
 from __future__ import annotations
 
+import logging
+
+# ---------------------------------------------------------------------------
+# Root logger — configure BEFORE importing routes so that logs from
+# firebase_store / routes module init (e.g. Firebase connection, case
+# pre-loading) are visible on the console and in the uvicorn log.
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)-8s | %(name)s | %(message)s",
+)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -14,14 +26,9 @@ from fastapi.middleware.cors import CORSMiddleware
 # FIREBASE_KEY_PATH and other env vars are available at import time.
 # ---------------------------------------------------------------------------
 try:
-    from dotenv import load_dotenv, find_dotenv
+    from dotenv import load_dotenv
 
-    _env_path = find_dotenv(raise_if_not_found=False)
-    if _env_path:
-        load_dotenv(dotenv_path=_env_path)
-        import logging
-
-        logging.getLogger(__name__).info("Loaded environment from %s", _env_path)
+    load_dotenv()
 except ImportError:
     pass  # python-dotenv not installed; rely on the real environment
 
