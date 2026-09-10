@@ -35,6 +35,7 @@ from app.services.recommendation_service import get_recommendation
 from app.services.risk_service import compute_risk
 from app.services.svi_service import compute_overall_svi
 from app.services.speech_to_text import SpeechToTextService
+from app.services.emotion_service import get_emotion_service
 from app.utils.validation import validate_upload
 
 api_router = APIRouter()
@@ -129,7 +130,7 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
 
         # ---- STT --------------------------------------------------------
         stt = SpeechToTextService()
-        raw_segments = stt.transcribe(safe_path, language="en", real_upload=True)
+        raw_segments = stt.transcribe(safe_path, language=None, real_upload=True)
 
         if not raw_segments:
             return JSONResponse(
@@ -141,7 +142,9 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             )
 
         # ---- analysis ---------------------------------------------------
-        analysis_svc = AnalysisService()
+        ai_provider = settings.ai_provider
+        analysis_svc = AnalysisService(ai_provider=ai_provider)
+        emotion_svc = get_emotion_service()
         analyzed: list[dict[str, Any]] = []
         immediate_safety = False
         all_indicators: set[str] = set()
@@ -153,7 +156,6 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
 
             stress = result["stress_score"]
             distress = result["distress_score"]
-            emotion = result["emotion"]
             confidence = result["confidence"]
             indicators = result["indicators"]
             safety_flag = result["safety_flag"]
@@ -165,13 +167,23 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             for ind in indicators:
                 all_indicators.add(ind)
 
+            # ---- Emotion analysis (text + acoustic) ----
+            emotion_result = emotion_svc.analyze_segment(
+                text=text,
+                audio_path=safe_path,
+                start_sec=float(seg.get("start", 0)),
+                end_sec=float(seg.get("end", 0)),
+            )
+            emotion_label = emotion_result["emotion"]
+            emotion_confidence = max(emotion_result["text_confidence"], emotion_result["acoustic_confidence"])
+
             # Per-segment risk (assistive, not clinical)
             segment_risk = compute_risk(
                 svi_score=stress,  # use stress as segment-level proxy before SVI
                 overall_stress=stress,
                 overall_distress=distress,
                 indicators=indicators,
-                confidence=confidence,
+                confidence=max(confidence, emotion_confidence),
                 immediate_safety=safety_flag,
             )
 
@@ -183,8 +195,8 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                     "speaker": seg.get("speaker", Speaker.CALLER.value),
                     "stress_score": stress,
                     "distress_score": distress,
-                    "emotion": emotion.value if isinstance(emotion, Emotion) else emotion,
-                    "confidence": confidence,
+                    "emotion": emotion_label,
+                    "confidence": max(confidence, emotion_confidence),
                     "indicators": indicators,
                     "safety_flag": safety_flag,
                     "immediate_safety_flag": immediate_flag,
@@ -193,6 +205,8 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                     else segment_risk["risk_level"],
                     "risk_explanation": segment_risk["explanation"],
                     "svi_score": 0,  # filled in after SVI computation
+                    "emotion_explanation": emotion_result.get("emotion_explanation", []),
+                    "accent_signals": emotion_result.get("accent_signals"),
                 }
             )
 
@@ -254,6 +268,8 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                 svi_score=int(s["svi_score"]),
                 risk_level=RiskLevel(s["risk_level"]) if s["risk_level"] in [e.value for e in RiskLevel] else RiskLevel.MODERATE,
                 risk_explanation=s["risk_explanation"],
+                emotion_explanation=s.get("emotion_explanation", []),
+                accent_signals=s.get("accent_signals"),
             )
             for s in analyzed
         ]
@@ -328,7 +344,8 @@ def _build_demo_case() -> AnalysisResponse:
     # Force demo segments directly
     segments_raw = _build_demo_segments(120.0)
 
-    analysis_svc = AnalysisService()
+    ai_provider = settings.ai_provider
+    analysis_svc = AnalysisService(ai_provider=ai_provider)
     analyzed: list[dict[str, Any]] = []
     immediate_safety = False
     all_indicators: set[str] = set()
@@ -350,6 +367,7 @@ def _build_demo_case() -> AnalysisResponse:
         for ind in indicators:
             all_indicators.add(ind)
 
+        # Per-segment risk (assistive, not clinical)
         segment_risk = compute_risk(
             svi_score=stress,
             overall_stress=stress,
@@ -367,7 +385,7 @@ def _build_demo_case() -> AnalysisResponse:
                 "speaker": seg.get("speaker", Speaker.CALLER.value),
                 "stress_score": stress,
                 "distress_score": distress,
-                "emotion": emotion.value if isinstance(emotion, Emotion) else emotion,
+                "emotion": emotion,
                 "confidence": confidence,
                 "indicators": indicators,
                 "safety_flag": safety_flag,
@@ -377,6 +395,8 @@ def _build_demo_case() -> AnalysisResponse:
                 else segment_risk["risk_level"],
                 "risk_explanation": segment_risk["explanation"],
                 "svi_score": 0,
+                "emotion_explanation": [],
+                "accent_signals": None,
             }
         )
 
@@ -428,14 +448,16 @@ def _build_demo_case() -> AnalysisResponse:
             end=s["end"],
             text=s["text"],
             speaker=Speaker(s["speaker"]) if s["speaker"] in [e.value for e in Speaker] else Speaker.CALLER,
-            stress_score=s["stress_score"],
-            distress_score=s["distress_score"],
+            stress_score=int(s["stress_score"]),
+            distress_score=int(s["distress_score"]),
             emotion=Emotion(s["emotion"]) if s["emotion"] in [e.value for e in Emotion] else Emotion.UNCERTAINTY,
             confidence=s["confidence"],
             indicators=s["indicators"],
-            svi_score=s["svi_score"],
+            svi_score=int(s["svi_score"]),
             risk_level=RiskLevel(s["risk_level"]) if s["risk_level"] in [e.value for e in RiskLevel] else RiskLevel.MODERATE,
             risk_explanation=s["risk_explanation"],
+            emotion_explanation=s.get("emotion_explanation", []),
+            accent_signals=s.get("accent_signals"),
         )
         for s in analyzed
     ]

@@ -256,7 +256,7 @@ class SpeechToTextService:
         try:
             segments_gen, _info = model.transcribe(
                 file_path,
-                language=None if language == "auto" else language,
+                language=None,  # auto-detect
                 beam_size=5,
                 word_timestamps=False,
             )
@@ -395,7 +395,7 @@ class SpeechToTextService:
         try:
             segments_gen, _info = model.transcribe(
                 file_path,
-                language=None if language == "auto" else language,
+                language=None,  # auto-detect
                 beam_size=5,
                 word_timestamps=False,
             )
