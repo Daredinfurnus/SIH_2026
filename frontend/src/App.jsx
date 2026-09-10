@@ -78,8 +78,8 @@ export default function App() {
   const handleFileChange = (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    if (!f.name.match(/\.(wav|mp3|m4a|ogg|webm)$/i)) {
-      setError('Unsupported format. Please use WAV, MP3, M4A, OGG, or WEBM.');
+    if (!f.name.match(/\.(wav|mp3|m4a|aac|ogg|webm|mp4)$/i)) {
+    setError('Unsupported format. Please use WAV, MP3, M4A, AAC, OGG, WEBM, or MP4.');
       return;
     }
     if (f.size > 50 * 1024 * 1024) {
