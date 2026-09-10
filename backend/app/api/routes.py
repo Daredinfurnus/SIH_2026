@@ -1,18 +1,15 @@
 """
 API routes for TraumaSense.
-
 Endpoints:
   GET  /api/health        — service health check
   POST /api/analyze       — upload + analyze
   GET  /api/cases/{case_id} — retrieve a previously analyzed case
 """
+
 from __future__ import annotations
 
 import os
-import time
-import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
@@ -39,9 +36,7 @@ from app.utils.validation import validate_upload
 
 api_router = APIRouter()
 
-# In-memory case store for the MVP (upload-only).
 _case_store: dict[str, dict[str, Any]] = {}
-
 _case_counter = 0
 
 
@@ -79,14 +74,12 @@ def health_check() -> HealthResponse:
 )
 async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
     """Accept an audio file, validate it, run analysis, and return a case."""
-    # ---- validate file presence -----------------------------------------
     if not file.filename:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content=ErrorResponse(detail="No file provided.", error_code="NO_FILE").model_dump(),
         )
 
-    # ---- read bytes -----------------------------------------------------
     try:
         contents = await file.read()
     except Exception as exc:
@@ -98,7 +91,6 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
     file_size = len(contents)
     max_bytes = settings.max_upload_size_bytes
 
-    # ---- validate -------------------------------------------------------
     error = validate_upload(file.filename, file_size, max_bytes)
     if error:
         return JSONResponse(
@@ -106,12 +98,10 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             content=ErrorResponse(detail=error, error_code="VALIDATION_ERROR").model_dump(),
         )
 
-    # ---- store temporarily ----------------------------------------------
     audio_svc = AudioService()
     safe_path = audio_svc.store_temp(file.filename, contents)
 
     try:
-        # ---- inspect metadata -------------------------------------------
         meta = audio_svc.inspect(safe_path)
         duration = meta.get("duration_seconds", 0.0) or 0.0
 
@@ -164,9 +154,8 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             emotion_label = emotion_result["emotion"]
             emotion_confidence = max(emotion_result["text_confidence"], emotion_result["acoustic_confidence"])
 
-            # Per-segment risk (assistive, not clinical)
             segment_risk = compute_risk(
-                svi_score=stress,  # use stress as segment-level proxy before SVI
+                svi_score=stress,
                 overall_stress=stress,
                 overall_distress=distress,
                 indicators=indicators,
@@ -191,7 +180,7 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                     if hasattr(segment_risk["risk_level"], "value")
                     else segment_risk["risk_level"],
                     "risk_explanation": segment_risk["explanation"],
-                    "svi_score": 0,  # filled in after SVI computation
+                    "svi_score": 0,
                     "emotion_explanation": emotion_result.get("emotion_explanation", []),
                     "accent_signals": emotion_result.get("accent_signals"),
                 }
@@ -201,7 +190,6 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         svi_result = compute_overall_svi(analyzed, list(all_indicators), immediate_safety)
         svi_score = svi_result.get("svi_score", 0)
 
-        # Fill per-segment SVI based on segment stress/distress with safety boost
         for seg in analyzed:
             seg_stress = seg["stress_score"]
             seg_distress = seg["distress_score"]
@@ -264,34 +252,32 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         response = AnalysisResponse(
             case_id=case_id,
             file_name=os.path.basename(file.filename),
-            duration_seconds=duration,
+            duration_seconds=round(duration, 2) if duration else round(len(contents) / 1_000_000 * 60.0, 2),
             transcript=transcript,
-            overall_stress=overall_stress,
-            overall_distress=overall_distress,
-            overall_confidence=overall_confidence,
-            svi_score=int(svi_score),
-            risk_level=risk_result["risk_level"].value
-            if hasattr(risk_result["risk_level"], "value")
-            else risk_result["risk_level"],
+            overall_stress_score=overall_stress,
+            overall_distress_score=overall_distress,
+            overall_svi_score=svi_score,
+            overall_risk_score=risk_result["risk_score"],
+            overall_risk_level=risk_result["risk_level"],
+            overall_confidence=round(overall_confidence, 2),
+            overall_indicators=sorted(all_indicators),
             risk_explanation=risk_result["explanation"],
+            svi_breakdown=svi_result.get("svi_breakdown", {}),
             recommendation=recommendation,
-            mode="upload",
+            mode=stt.provider_name(),
             analyzed_at=_now_iso(),
+            immediate_safety_indicators=risk_result["immediate_safety_indicators"],
         )
 
         _case_store[case_id] = response.model_dump()
         return response
 
     finally:
-        # Clean up temp file.
-        try:
-            os.remove(safe_path)
-        except OSError:
-            pass
+        audio_svc.release(safe_path)
 
 
 # ===========================================================================
-# Cases
+# Case retrieval
 # ===========================================================================
 
 @api_router.get("/cases/{case_id}", response_model=AnalysisResponse | None)
@@ -304,7 +290,7 @@ def get_case(case_id: str) -> dict[str, Any] | None:
 
 
 # ===========================================================================
-# Helpers
+# Internal helpers
 # ===========================================================================
 
 def _mean_int(values: list[int]) -> int:
@@ -316,4 +302,4 @@ def _mean_int(values: list[int]) -> int:
 def _mean_float(values: list[float]) -> float:
     if not values:
         return 0.0
-    return round(sum(values) / len(values), 2)
+    return sum(values) / len(values)

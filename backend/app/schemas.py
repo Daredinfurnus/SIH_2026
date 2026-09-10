@@ -61,8 +61,6 @@ class TranscriptSegment(BaseModel):
     svi_score: int = Field(..., ge=0, le=100)
     risk_level: RiskLevel
     risk_explanation: list[str] = Field(default_factory=list)
-    emotion_explanation: list[str] = Field(default_factory=list)
-    accent_signals: dict[str, float] | None = None
 
 
 # ===========================================================================
