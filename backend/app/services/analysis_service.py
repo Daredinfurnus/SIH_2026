@@ -25,6 +25,11 @@ from typing import Any
 
 from app.schemas import Emotion, RiskLevel
 
+try:
+    from app.services.nlp_service import get_nlp_service
+except ImportError:
+    get_nlp_service = None  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # Prototype lexical signals — grouped by the dimension they inform
 # ---------------------------------------------------------------------------
@@ -150,26 +155,78 @@ def _base_confidence(text: str, signal_count: int) -> float:
 class AnalysisService:
     """Prototype conversational analysis engine."""
 
-    def analyze_segment(self, text: str, base_emotion: str | None = None) -> dict[str, Any]:
+    def __init__(self, ai_provider: str | None = None) -> None:
+        self.ai_provider = (ai_provider or "demo").lower()
+
+    def analyze_segment(
+        self,
+        text: str,
+        base_emotion: str | None = None,
+        ai_provider: str | None = None,
+    ) -> dict[str, Any]:
         """Analyze a single transcript segment and return prototype scores.
+
+        Parameters:
+            text:               The transcript segment text.
+            base_emotion:       Optional emotion hint from the STT layer.
+            ai_provider:        NLP provider override (e.g. "indicbert").
+
+        When ai_provider is "indicbert" (or configured via constructor) and
+        the text is in a non-English script, the NLP service computes indicator
+        scores via cosine similarity against prototype embeddings.  These
+        NLP-derived scores replace the English-only lexical scores for that
+        segment — so Hindi (and other Indic languages) receive meaningful
+        analysis without being forced into English translation.
 
         Returns a dict with:
             stress_score, distress_score, emotion, confidence,
             indicators, safety_flag, immediate_safety_flag
         """
+        provider = (ai_provider or self.ai_provider).lower()
+        use_nlp = provider == "indicbert"
+        nlp_svc = get_nlp_service() if use_nlp and get_nlp_service else None
+
         if not text or not text.strip():
             return _empty_analysis()
 
+        # ---- Script detection: Is this likely an Indic language? ----
+        nlp_enabled = (
+            use_nlp
+            and nlp_svc is not None
+            and _looks_like_indic_script(text)
+        )
+
+        # ---- NLP path (multilingual) ----
+        if nlp_enabled:
+            nlp_indicators = nlp_svc.score_indicators(text)
+            if nlp_indicators:
+                return {
+                    "stress_score": nlp_svc.derive_stress(nlp_indicators),
+                    "distress_score": nlp_svc.derive_distress(nlp_indicators),
+                    "emotion": nlp_svc.derive_emotion(nlp_indicators),
+                    "confidence": nlp_svc.derive_confidence(nlp_indicators),
+                    "indicators": nlp_svc.derive_indicators(nlp_indicators),
+                    "safety_flag": bool(
+                        any(
+                            nlp_indicators.get(ind, 0.0) > 0.40
+                            for ind in ("safety concern", "fear")
+                        )
+                    ),
+                    "immediate_safety_flag": False,
+                }
+
+        # ---- Lexical path (prototype, English-focused) ----
         stress = _score_stress(text)
         distress = _score_distress(text)
         emotion = _classify_emotion(text, base_emotion)
-        confidence = _base_confidence(text, _count_signals(text, _STRESS_SIGNS + _DISTRESS_SIGNS))
+        confidence = _base_confidence(
+            text, _count_signals(text, _STRESS_SIGNS + _DISTRESS_SIGNS)
+        )
         indicators = _extract_indicators(text)
         safety_flag = bool(_count_signals(text, _SAFETY_SIGNS) > 0)
-        immediate_safety_flag = bool(_count_signals(text, _IMMEDIATE_SAFETY_SIGNS) > 0)
-
-        # Stress and distress are separate signals; neither is the same as risk.
-        # The caller (risk_service) combines them with context and safety flags.
+        immediate_safety_flag = bool(
+            _count_signals(text, _IMMEDIATE_SAFETY_SIGNS) > 0
+        )
 
         return {
             "stress_score": stress,
@@ -264,6 +321,62 @@ def _extract_indicators(text: str) -> list[str]:
             unique.append(ind)
 
     return unique if unique else ["general concern"]
+
+
+def _looks_like_indic_script(text: str) -> bool:
+    """
+    Detect whether text contains characters from Indic scripts.
+
+    All Indic-script text is routed through the IndicBERT NLP path
+    (model supports 24 Indic languages + English). Only Latin-only
+    text stays on the English-only lexical path.
+    """
+    if not text:
+        return False
+
+    for ch in text:
+        cp = ord(ch)
+        # Devanagari (Hindi, Marathi, Nepali, Sanskrit)
+        if 0x0900 <= cp <= 0x097F:
+            return True
+        # Bengali
+        if 0x0980 <= cp <= 0x09FF:
+            return True
+        # Gurmukhi (Punjabi)
+        if 0x0A00 <= cp <= 0x0A7F:
+            return True
+        # Gujarati
+        if 0x0A80 <= cp <= 0x0AFF:
+            return True
+        # Oriya (Odia)
+        if 0x0B00 <= cp <= 0x0B7F:
+            return True
+        # Tamil
+        if 0x0B80 <= cp <= 0x0BFF:
+            return True
+        # Telugu
+        if 0x0C00 <= cp <= 0x0C7F:
+            return True
+        # Kannada
+        if 0x0C80 <= cp <= 0x0CFF:
+            return True
+        # Malayalam
+        if 0x0D00 <= cp <= 0x0D7F:
+            return True
+        # Sinhala
+        if 0x0D80 <= cp <= 0x0DFF:
+            return True
+        # Myanmar (Burmese)
+        if 0x1000 <= cp <= 0x109F:
+            return True
+        # Tibetan
+        if 0x0F00 <= cp <= 0x0FFF:
+            return True
+        # Myanmar extended
+        if 0x10A0 <= cp <= 0x10FF:
+            return True
+
+    return False
 
 
 def _empty_analysis() -> dict[str, Any]:
