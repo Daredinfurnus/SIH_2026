@@ -11,12 +11,11 @@ import {
   CheckCircle2,
   Printer,
   RefreshCw,
-  WifiOff,
   Shield,
   UserCheck,
   X,
 } from 'lucide-react';
-import { healthCheck, getDemoAnalysis, uploadAndAnalyze, getCase } from './services/api';
+import { healthCheck, uploadAndAnalyze, getCase } from './services/api';
 import Header from './components/Header';
 import ConsentNotice from './components/ConsentNotice';
 import UploadPanel from './components/UploadPanel';
@@ -120,26 +119,7 @@ export default function App() {
     if (progressInterval.current) clearInterval(progressInterval.current);
   };
 
-  // ---- demo mode -------------------------------------------------------
-  const startDemo = async () => {
-    setError(null);
-    setFile(null);
-    setAudioUrl(null);
-    setAudioName('');
-    setAudioSize(0);
-    setAudioDuration(0);
-    setCaseData(null);
-    setActiveTab('dashboard');
-    setCurrentSegment(0);
-    setIsPlaying(false);
-    setProgress(0);
-    if (progressInterval.current) clearInterval(progressInterval.current);
-    // Require consent before demo analysis, same as uploaded file flow.
-    setConsentAck(false);
-    setMode('uploaded');
-  };
-
-  // ---- analyze uploaded file or demo -----------------------------------
+  // ---- analyze uploaded file -----------------------------------
   const startAnalysis = async () => {
     if (!consentAck) {
       setError('Please acknowledge the consent notice before analysis.');
@@ -151,18 +131,8 @@ export default function App() {
     setProgress(0);
     setCurrentSegment(0);
     try {
-      let data;
-      if (file) {
-        // Real file upload
-        data = await uploadAndAnalyze(file);
-        setAudioDuration(data.duration_seconds || 0);
-      } else {
-        // Demo mode — no file uploaded, load deterministic demo
-        data = await getDemoAnalysis();
-        setAudioDuration(data.duration_seconds || 120);
-        setAudioUrl(null);
-        setFile(null);
-      }
+      const data = await uploadAndAnalyze(file);
+      setAudioDuration(data.duration_seconds || 0);
       setCaseData(data);
       setMode('done');
     } catch (err) {
@@ -300,15 +270,11 @@ export default function App() {
               <div className="flex items-center gap-2 mt-3 text-sm text-muted" style={{ flexWrap: 'wrap' }}>
                 <span className="flex items-center gap-1"><Shield size={13} /> Privacy-first</span>
                 <span className="flex items-center gap-1"><UserCheck size={13} /> Human-in-the-loop</span>
-                <span className="flex items-center gap-1"><WifiOff size={13} /> Demo mode (offline)</span>
               </div>
-            </div>
+              </div>
 
-            <div className="flex gap-3 flex-wrap">
-              <button className="btn btn-primary" onClick={startDemo}>
-                <WifiOff size={15} /> Start Demo Mode
-              </button>
-              <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
+              <div className="flex gap-3 flex-wrap">
+              <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
                 <Upload size={15} /> Upload Call
                 <input
                   type="file"
@@ -320,12 +286,12 @@ export default function App() {
               </label>
             </div>
             <p className="text-xs text-dim mt-3">
-              Drop a consented prerecorded helpline call or try the demo to see the full analysis flow.
+            Drop a consented prerecorded helpline call to see the full analysis flow.
             </p>
           </>
         )}
 
-        {/* UPLOADED — file ready or demo mode, waiting for consent + analysis */}
+        {/* UPLOADED — file ready, waiting for consent + analysis */}
         {mode === 'uploaded' && (
           <>
             <ConsentNotice
@@ -380,7 +346,6 @@ export default function App() {
               caseId={caseData.case_id}
               fileName={caseData.file_name}
               duration={caseData.duration_seconds}
-              mode={caseData.mode}
               riskLevel={caseData.overall_risk_level}
               riskScore={caseData.overall_risk_score}
               confidence={caseData.overall_confidence}
@@ -421,17 +386,6 @@ export default function App() {
 
             <Disclaimer />
           </>
-        )}
-
-        {/* Demo mode direct link */}
-        {mode === 'idle' && (
-          <div className="card mt-4" style={{ background: 'rgba(75,110,245,0.04)', border: '1px solid rgba(75,110,245,0.1)' }}>
-            <div className="flex items-center gap-2 text-sm text-muted">
-              <WifiOff size={14} />
-              Designed for Indian-language and code-mixed conversations.
-              Prototype conversational analysis engine — not a clinical diagnosis.
-            </div>
-          </div>
         )}
       </main>
     </div>

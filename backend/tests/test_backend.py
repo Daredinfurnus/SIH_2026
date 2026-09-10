@@ -3,7 +3,7 @@ import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from app.api.routes import _build_demo_case, _mean_float, _mean_int
+from app.api.routes import _mean_float, _mean_int
 from app.schemas import AnalysisResponse, Emotion, RiskLevel, Speaker, TranscriptSegment
 from app.services.analysis_service import AnalysisService
 from app.services.svi_service import SVIService
@@ -71,33 +71,6 @@ class TestHealthEndpoint(unittest.TestCase):
         )
         self.assertEqual(hr.case_id, "CASE-26093-0001")
         self.assertEqual(hr.overall_risk_level, RiskLevel.MODERATE)
-
-
-class TestDemoEndpoint(unittest.TestCase):
-    def test_demo_case_is_deterministic(self):
-        a = _build_demo_case()
-        b = _build_demo_case()
-        self.assertEqual(a.case_id, b.case_id)
-        self.assertEqual(a.overall_stress_score, b.overall_stress_score)
-        self.assertEqual(a.overall_distress_score, b.overall_distress_score)
-        self.assertEqual(a.overall_svi_score, b.overall_svi_score)
-        self.assertEqual(a.overall_risk_level, b.overall_risk_level)
-
-    def test_demo_has_segments(self):
-        case = _build_demo_case()
-        self.assertGreater(len(case.transcript), 0)
-
-    def test_demo_case_id_format(self):
-        case = _build_demo_case()
-        self.assertTrue(case.case_id.startswith("CASE-26093-"))
-
-    def test_demo_risk_level_is_plausible(self):
-        case = _build_demo_case()
-        self.assertIn(case.overall_risk_level, [RiskLevel.LOW, RiskLevel.MODERATE, RiskLevel.HIGH, RiskLevel.CRITICAL])
-
-    def test_demo_indicators_populated(self):
-        case = _build_demo_case()
-        self.assertTrue(len(case.overall_indicators) > 0)
 
 
 # ===========================================================================
@@ -328,37 +301,6 @@ class TestValidation(unittest.TestCase):
 # ===========================================================================
 # Demo case fields match schema
 # ===========================================================================
-
-class TestDemoSchemaCompliance(unittest.TestCase):
-    def test_demo_serializes_to_analysis_response(self):
-        case = _build_demo_case()
-        # Should be an AnalysisResponse already
-        self.assertIsInstance(case, AnalysisResponse)
-        self.assertTrue(hasattr(case, "case_id"))
-        self.assertTrue(hasattr(case, "transcript"))
-        self.assertTrue(hasattr(case, "overall_risk_level"))
-        self.assertTrue(hasattr(case, "recommendation"))
-        self.assertTrue(hasattr(case, "disclaimer"))
-
-    def test_demo_disclaimer_present(self):
-        case = _build_demo_case()
-        self.assertIn("clinical diagnosis", case.disclaimer.lower())
-
-    def test_transcript_segments_have_required_fields(self):
-        case = _build_demo_case()
-        for seg in case.transcript:
-            self.assertTrue(hasattr(seg, "start"))
-            self.assertTrue(hasattr(seg, "end"))
-            self.assertTrue(hasattr(seg, "text"))
-            self.assertTrue(hasattr(seg, "stress_score"))
-            self.assertTrue(hasattr(seg, "distress_score"))
-            self.assertTrue(hasattr(seg, "emotion"))
-            self.assertTrue(hasattr(seg, "confidence"))
-            self.assertTrue(hasattr(seg, "indicators"))
-            self.assertTrue(hasattr(seg, "svi_score"))
-            self.assertTrue(hasattr(seg, "risk_level"))
-            self.assertTrue(hasattr(seg, "risk_explanation"))
-
 
 # ===========================================================================
 # Runner

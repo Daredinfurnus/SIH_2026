@@ -2,7 +2,7 @@ import React from 'react';
 import { RefreshCw, Activity } from 'lucide-react';
 
 export default function CaseHeader({
-  caseId, fileName, duration, mode,
+  caseId, fileName, duration,
   riskLevel, riskScore, confidence, onReset, onPrint
 }) {
   const riskClass = `risk-${riskLevel.toLowerCase()}`;
@@ -35,8 +35,8 @@ export default function CaseHeader({
           <div className="value-sm">{duration}s</div>
         </div>
         <div className="report-item">
-          <div className="label">Processing Mode</div>
-          <div className="value-sm" style={{ color: mode === 'demo' ? '#8B9CF5' : '#34D399' }}>{mode === 'demo' ? 'Demo (offline)' : 'Live'}</div>
+        <div className="label">Processing Mode</div>
+        <div className="value-sm" style={{ color: '#34D399' }}>Live</div>
         </div>
         <div className="report-item">
           <div className="label">Risk Level</div>
