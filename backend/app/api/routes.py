@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,12 +36,25 @@ from app.services.risk_service import compute_risk
 from app.services.svi_service import compute_overall_svi
 from app.services.speech_to_text import SpeechToTextService
 from app.services.emotion_service import get_emotion_service
+from app.services.firebase_store import cloud_load_all, cloud_save, is_ready
 from app.utils.validation import validate_upload
 
 api_router = APIRouter()
 
 # In-memory case store for the MVP (upload-only).
 _case_store: dict[str, dict[str, Any]] = {}
+
+# ---------------------------------------------------------------------------
+# Persistence — load previously saved cases from Firestore on startup.
+# When Firebase is unavailable we stay in-memory only; the API contract is
+# unchanged either way.
+# ---------------------------------------------------------------------------
+_loaded_from_firestore = cloud_load_all()
+_case_store.update(_loaded_from_firestore)
+if _loaded_from_firestore:
+    logger.info("Pre-loaded %d cases from Firestore into in-memory store", len(_loaded_from_firestore))
+else:
+    logger.info("No cases loaded from Firestore (empty or unavailable)")
 
 _case_counter = 0
 
@@ -280,6 +294,7 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         )
 
         _case_store[case_id] = response.model_dump()
+        cloud_save(case_id, response.model_dump())
         return response
 
     finally:

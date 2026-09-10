@@ -1,12 +1,29 @@
-"""
-TraumaSense — AI-assisted stress & trauma-related conversational assessment
+"""TraumaSense — AI-assisted stress & trauma-related conversational assessment
 SIH 2026 · Problem Statement 26093
 Team ESPADA-X · KCC Institute of Technology & Management
 
 Backend application root.
 """
+from __future__ import annotations
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# ---------------------------------------------------------------------------
+# Environment — load .env (if present) BEFORE importing settings so that
+# FIREBASE_KEY_PATH and other env vars are available at import time.
+# ---------------------------------------------------------------------------
+try:
+    from dotenv import load_dotenv, find_dotenv
+
+    _env_path = find_dotenv(raise_if_not_found=False)
+    if _env_path:
+        load_dotenv(dotenv_path=_env_path)
+        import logging
+
+        logging.getLogger(__name__).info("Loaded environment from %s", _env_path)
+except ImportError:
+    pass  # python-dotenv not installed; rely on the real environment
 
 from app.config import settings
 from app.api.routes import api_router
