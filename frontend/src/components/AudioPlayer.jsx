@@ -62,7 +62,7 @@ export default function AudioPlayer({
             </span>
           </>
         ) : (
-          <span className="text-xs text-dim">No audio loaded. Run the demo or upload a file.</span>
+          <span className="text-xs text-dim">No audio loaded — upload a file to begin.</span>
         )}
       </div>
       {duration > 0 && (

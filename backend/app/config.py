@@ -18,10 +18,10 @@ class Settings:
     """Runtime settings for TraumaSense backend."""
 
     # ---- Providers ----------------------------------------------------------
-    stt_provider: str = _get_env("STT_PROVIDER", "demo")
-    ai_provider: str = _get_env("AI_PROVIDER", "demo")
+    stt_provider: str = _get_env("STT_PROVIDER", "whisper")
+    ai_provider: str = _get_env("AI_PROVIDER", "indicbert")
 
-    # ---- Upload constraints ------------------------------------------------
+    # ---- Upload constraints -------------------------------------------------
     max_upload_size_mb: int = int(
         _get_env("MAX_UPLOAD_SIZE_MB", str(MAX_UPLOAD_SIZE_DEFAULT_MB))
     )
@@ -31,9 +31,6 @@ class Settings:
     upload_dir: str = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads"
     )
-
-    # ---- Demo ----------------------------------------------------------------
-    demo_mode: bool = stt_provider == "demo" or ai_provider == "demo"
 
     # ---- Language ------------------------------------------------------------
     default_language: str = _get_env("DEFAULT_LANGUAGE", "en")

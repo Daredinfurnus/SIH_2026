@@ -1,22 +1,21 @@
 """
 API routes for TraumaSense.
-
 Endpoints:
   GET  /api/health        — service health check
   POST /api/analyze       — upload + analyze
   GET  /api/cases/{case_id} — retrieve a previously analyzed case
 """
+
 from __future__ import annotations
 
 import os
 import time
 import uuid
 import logging
+from datetime import datetime, timezone
+from typing import Any
 
 logger = logging.getLogger(__name__)
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
@@ -44,7 +43,6 @@ from app.utils.validation import validate_upload
 
 api_router = APIRouter()
 
-# In-memory case store for the MVP (upload-only).
 _case_store: dict[str, dict[str, Any]] = {}
 
 # ---------------------------------------------------------------------------
@@ -96,14 +94,12 @@ def health_check() -> HealthResponse:
 )
 async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
     """Accept an audio file, validate it, run analysis, and return a case."""
-    # ---- validate file presence -----------------------------------------
     if not file.filename:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content=ErrorResponse(detail="No file provided.", error_code="NO_FILE").model_dump(),
         )
 
-    # ---- read bytes -----------------------------------------------------
     try:
         contents = await file.read()
     except Exception as exc:
@@ -115,7 +111,6 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
     file_size = len(contents)
     max_bytes = settings.max_upload_size_bytes
 
-    # ---- validate -------------------------------------------------------
     error = validate_upload(file.filename, file_size, max_bytes)
     if error:
         return JSONResponse(
@@ -123,18 +118,27 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             content=ErrorResponse(detail=error, error_code="VALIDATION_ERROR").model_dump(),
         )
 
-    # ---- store temporarily ----------------------------------------------
     audio_svc = AudioService()
     safe_path = audio_svc.store_temp(file.filename, contents)
 
     try:
-        # ---- inspect metadata -------------------------------------------
         meta = audio_svc.inspect(safe_path)
         duration = meta.get("duration_seconds", 0.0) or 0.0
 
+        # ---- normalization ------------------------------------------------------
+        norm_result = normalize_audio(safe_path, settings.upload_dir)
+        normalized_path = norm_result.get("normalized_path")
+        original_format = norm_result.get("original_format", "unknown")
+        ffmpeg_ok = norm_result.get("ffmpeg_available", False)
+        norm_error = norm_result.get("error")
+
+        if norm_error and not ffmpeg_ok:
+            # FFmpeg unavailable is a warning, not a fatal error — try with original
+            logger.warning("Audio normalization skipped: %s", norm_error)
+
         # ---- STT --------------------------------------------------------
         stt = SpeechToTextService()
-        raw_segments = stt.transcribe(safe_path, language=None, real_upload=True)
+        raw_segments = stt.transcribe(normalized_path or safe_path, language=None, real_upload=True)
 
         if not raw_segments:
             return JSONResponse(
@@ -172,18 +176,19 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                 all_indicators.add(ind)
 
             # ---- Emotion analysis (text + acoustic) ----
+            # Use normalized audio path for acoustic analysis if available
+            audio_for_acoustic = normalized_path or safe_path
             emotion_result = emotion_svc.analyze_segment(
                 text=text,
-                audio_path=safe_path,
+                audio_path=audio_for_acoustic,
                 start_sec=float(seg.get("start", 0)),
                 end_sec=float(seg.get("end", 0)),
             )
             emotion_label = emotion_result["emotion"]
             emotion_confidence = max(emotion_result["text_confidence"], emotion_result["acoustic_confidence"])
 
-            # Per-segment risk (assistive, not clinical)
             segment_risk = compute_risk(
-                svi_score=stress,  # use stress as segment-level proxy before SVI
+                svi_score=stress,
                 overall_stress=stress,
                 overall_distress=distress,
                 indicators=indicators,
@@ -208,7 +213,7 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                     if hasattr(segment_risk["risk_level"], "value")
                     else segment_risk["risk_level"],
                     "risk_explanation": segment_risk["explanation"],
-                    "svi_score": 0,  # filled in after SVI computation
+                    "svi_score": 0,
                     "emotion_explanation": emotion_result.get("emotion_explanation", []),
                     "accent_signals": emotion_result.get("accent_signals"),
                 }
@@ -218,7 +223,6 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         svi_result = compute_overall_svi(analyzed, list(all_indicators), immediate_safety)
         svi_score = svi_result.get("svi_score", 0)
 
-        # Fill per-segment SVI based on segment stress/distress with safety boost
         for seg in analyzed:
             seg_stress = seg["stress_score"]
             seg_distress = seg["distress_score"]
@@ -257,6 +261,50 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         )
 
         # ---- build response ---------------------------------------------
+        # Determine detected language from first segment
+        detected_lang = "en"
+        for seg in raw_segments:
+            dl = seg.get("detected_language")
+            if dl and dl not in ("auto-detected", None):
+                detected_lang = dl
+                break
+
+        # Model status tracking
+        asr_status = "success" if raw_segments else "failed"
+        
+        # Check NLP status
+        nlp_status = "unavailable"
+        if nlp_svc is not None:
+            try:
+                nlp_status = "success"
+            except Exception:
+                nlp_status = "failed"
+        
+        # Check acoustic status from emotion results
+        acoustic_status = "unavailable"
+        has_acoustic = any(
+            s.get("emotion_source") in ("acoustic", "fused")
+            for s in analyzed
+        )
+        if has_acoustic:
+            acoustic_status = "success"
+        elif emotion_svc is not None:
+            acoustic_status = "unavailable"  # service exists but no acoustic data
+
+        # Determine fusion mode
+        fusion_mode = "none"
+        text_only = sum(1 for s in analyzed if s.get("emotion_source") == "text")
+        acoustic_only = sum(1 for s in analyzed if s.get("emotion_source") == "acoustic")
+        fused = sum(1 for s in analyzed if s.get("emotion_source") == "fused")
+        if fused > 0:
+            fusion_mode = "multimodal"
+        elif text_only > 0 and acoustic_only > 0:
+            fusion_mode = "multimodal"
+        elif text_only > 0:
+            fusion_mode = "text_only"
+        elif acoustic_only > 0:
+            fusion_mode = "acoustic_only"
+
         case_id = _next_case_id()
         transcript = [
             TranscriptSegment(
@@ -281,7 +329,7 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         response = AnalysisResponse(
             case_id=case_id,
             file_name=os.path.basename(file.filename),
-            duration_seconds=duration,
+            duration_seconds=round(duration, 2) if duration else round(len(contents) / 1_000_000 * 60.0, 2),
             transcript=transcript,
             overall_stress_score=overall_stress,
             overall_distress_score=overall_distress,
@@ -312,6 +360,14 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             immediate_safety_indicators=immediate_safety,
             language="en",
             analyzed_at=_now_iso(),
+            immediate_safety_indicators=risk_result["immediate_safety_indicators"],
+            model_status=ModelStatus(
+                asr=asr_status,
+                text_emotion=nlp_status,
+                acoustic_emotion=acoustic_status,
+                fusion=fusion_mode,
+            ),
+            detected_language=detected_lang,
         )
 
         _case_store[case_id] = response.model_dump()
@@ -319,15 +375,14 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         return response
 
     finally:
-        # Clean up temp file.
-        try:
-            os.remove(safe_path)
-        except OSError:
-            pass
+        # Clean up normalized file if we created one
+        if normalized_path and normalized_path != safe_path:
+            cleanup_normalized(normalized_path)
+        audio_svc.release(safe_path)
 
 
 # ===========================================================================
-# Cases
+# Case retrieval
 # ===========================================================================
 
 @api_router.get("/cases/{case_id}", response_model=AnalysisResponse | None)
@@ -340,7 +395,7 @@ def get_case(case_id: str) -> dict[str, Any] | None:
 
 
 # ===========================================================================
-# Helpers
+# Internal helpers
 # ===========================================================================
 
 def _mean_int(values: list[int]) -> int:
@@ -352,4 +407,4 @@ def _mean_int(values: list[int]) -> int:
 def _mean_float(values: list[float]) -> float:
     if not values:
         return 0.0
-    return round(sum(values) / len(values), 2)
+    return sum(values) / len(values)

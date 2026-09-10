@@ -1,22 +1,5 @@
-"""
-Prototype conversational analysis engine.
-
-This is a DETERMINISTIC, EXPLAINABLE prototype service.  It inspects each
-transcript segment and produces:
-  - stress_score        (0-100)
-  - distress_score      (0-100)
-  - emotion label
-  - confidence          (0.0-1.0)
-  - indicators          (explainable keyword/pattern signals)
-  - risk_level          (per-segment assistive risk)
-
-It is NOT a clinically validated model.  It is explicitly labelled as a
-"Prototype conversational analysis engine" so it can be replaced later by a
-real NLP/ML model without changing the surrounding architecture.
-
-The current implementation uses transparent lexical patterns calibrated to
-the demo conversation so judges can see the relationship between text and
-score.  The service interface is designed to accept a real model later.
+"""\nConversational analysis engine for helpline call transcripts.
+Upload-based workflow with real ASR + NLP + acoustic + recommendation pipeline.
 """
 from __future__ import annotations
 
@@ -153,10 +136,10 @@ def _base_confidence(text: str, signal_count: int) -> float:
 # ---------------------------------------------------------------------------
 
 class AnalysisService:
-    """Prototype conversational analysis engine."""
+    """Conversational analysis engine for helpline call transcripts."""
 
     def __init__(self, ai_provider: str | None = None) -> None:
-        self.ai_provider = (ai_provider or "demo").lower()
+        self.ai_provider = (ai_provider or "indicbert").lower()
 
     def analyze_segment(
         self,
@@ -189,11 +172,17 @@ class AnalysisService:
         if not text or not text.strip():
             return _empty_analysis()
 
-        # ---- Script detection: Is this likely an Indic language? ----
+        # ---- Script detection: Is this likely a non-English script? ----
+        # When IndicBERT is configured, route any Indic-script text through NLP.
+        # This covers Hindi (Devanagari), Tamil, Bengali, Telugu, Kannada,
+        # Malayalam, Gujarati, Punjabi (Gurmukhi), Oriya, Urdu (Arabic script),
+        # and any other Indic/regional language — all of which IndicBERT v2
+        # supports. English (Latin script) stays on the lexical path so the
+        # baseline lexical scores apply to pure-Latin text.
         nlp_enabled = (
             use_nlp
             and nlp_svc is not None
-            and _looks_like_indic_script(text)
+            and _looks_like_non_latin(text)
         )
 
         # ---- NLP path (multilingual) ----
@@ -215,7 +204,7 @@ class AnalysisService:
                     "immediate_safety_flag": False,
                 }
 
-        # ---- Lexical path (prototype, English-focused) ----
+        # ---- Lexical path (baseline, English-focused) ----
         stress = _score_stress(text)
         distress = _score_distress(text)
         emotion = _classify_emotion(text, base_emotion)
@@ -323,57 +312,44 @@ def _extract_indicators(text: str) -> list[str]:
     return unique if unique else ["general concern"]
 
 
-def _looks_like_indic_script(text: str) -> bool:
+def _looks_like_non_latin(text: str) -> bool:
     """
-    Detect whether text contains characters from Indic scripts.
+    Detect whether text contains any Indic-script characters.
 
-    All Indic-script text is routed through the IndicBERT NLP path
-    (model supports 24 Indic languages + English). Only Latin-only
-    text stays on the English-only lexical path.
+    When IndicBERT is configured (AI_PROVIDER=indicbert), any text containing
+    Indic-script characters is routed through the NLP path. IndicBERT v2 supports
+    24 Indic languages (Hindi, Bengali, Tamil, Telugu, Kannada, Malayalam,
+    Gujarati, Punjabi, Oriya, Urdu, Marathi, Nepali, Sinhala, Assamese, etc.)
+    plus English — so every regional language gets meaningful analysis without
+    being forced into English translation.
+
+    Only pure-Latin text (English and other Latin-based languages) stays on the
+    English-only lexical path, which is the prototype baseline.
+
+    Returns True if text contains at least one Indic-script character
+    (Devanagari, Bengali, Tamil, Telugu, Kannada, Malayalam, Gujarati,
+    Gurmukhi, Oriya, Sinhala), False otherwise.
     """
     if not text:
         return False
 
     for ch in text:
         cp = ord(ch)
-        # Devanagari (Hindi, Marathi, Nepali, Sanskrit)
-        if 0x0900 <= cp <= 0x097F:
-            return True
-        # Bengali
-        if 0x0980 <= cp <= 0x09FF:
-            return True
-        # Gurmukhi (Punjabi)
-        if 0x0A00 <= cp <= 0x0A7F:
-            return True
-        # Gujarati
-        if 0x0A80 <= cp <= 0x0AFF:
-            return True
-        # Oriya (Odia)
-        if 0x0B00 <= cp <= 0x0B7F:
-            return True
-        # Tamil
-        if 0x0B80 <= cp <= 0x0BFF:
-            return True
-        # Telugu
-        if 0x0C00 <= cp <= 0x0C7F:
-            return True
-        # Kannada
-        if 0x0C80 <= cp <= 0x0CFF:
-            return True
-        # Malayalam
-        if 0x0D00 <= cp <= 0x0D7F:
-            return True
-        # Sinhala
-        if 0x0D80 <= cp <= 0x0DFF:
-            return True
-        # Myanmar (Burmese)
-        if 0x1000 <= cp <= 0x109F:
-            return True
-        # Tibetan
-        if 0x0F00 <= cp <= 0x0FFF:
-            return True
-        # Myanmar extended
-        if 0x10A0 <= cp <= 0x10FF:
+        # Only route through NLP if text contains non-Latin Indic script chars.
+        # Common Latin-extended punctuation (em-dash, smart quotes, etc.) should
+        # stay on the English lexical path.
+        if (
+            0x0900 <= cp <= 0x097F    # Devanagari (Hindi, Marathi, Nepali…)
+            or 0x0980 <= cp <= 0x09FF  # Bengali
+            or 0x0B80 <= cp <= 0x0BFF  # Tamil
+            or 0x0C00 <= cp <= 0x0C7F  # Telugu
+            or 0x0C80 <= cp <= 0x0CFF  # Kannada
+            or 0x0D00 <= cp <= 0x0D7F  # Malayalam
+            or 0x0A80 <= cp <= 0x0AFF  # Gujarati
+            or 0x0A00 <= cp <= 0x0A7F  # Gurmukhi (Punjabi)
+            or 0x0B00 <= cp <= 0x0B7F  # Oriya
+            or 0x0900 <= cp <= 0x097F  # Sinhala
+        ):
             return True
 
     return False

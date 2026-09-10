@@ -36,6 +36,7 @@ _ALLOWED_MAGIC_PREFIXES = (
     b"\x80\x00\x00\x00\x66\x74\x79\x70",  # MP4 ftyp (alternatively)
     b"\x4f\x67\x67\x53",  # OggS
     b"\x1a\x45\xdf\xa3",  # WebM/EBML
+    b"\x00\x00\x00\x18\x66\x74\x79\x70",  # MP4 ftyp (AAC)
 )
 
 

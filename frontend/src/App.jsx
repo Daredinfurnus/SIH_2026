@@ -82,8 +82,8 @@ export default function App() {
   const handleFileChange = (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    if (!f.name.match(/\.(wav|mp3|m4a|ogg|webm)$/i)) {
-      setError('Unsupported format. Please use WAV, MP3, M4A, OGG, or WEBM.');
+    if (!f.name.match(/\.(wav|mp3|m4a|aac|ogg|webm|mp4)$/i)) {
+    setError('Unsupported format. Please use WAV, MP3, M4A, AAC, OGG, WEBM, or MP4.');
       return;
     }
     if (f.size > 50 * 1024 * 1024) {
@@ -123,7 +123,7 @@ export default function App() {
     if (progressInterval.current) clearInterval(progressInterval.current);
   };
 
-  // ---- analyze uploaded file -----------------------------------
+  // ---- analyze uploaded file -----------------------------------------
   const startAnalysis = async () => {
     if (!consentAck) {
       setError('Please acknowledge the consent notice before analysis.');
@@ -322,9 +322,9 @@ export default function App() {
                 <span className="flex items-center gap-1"><Shield size={13} /> Privacy-first</span>
                 <span className="flex items-center gap-1"><UserCheck size={13} /> Human-in-the-loop</span>
               </div>
-              </div>
+            </div>
 
-              <div className="flex gap-3 flex-wrap">
+            <div className="flex gap-3 flex-wrap">
               <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
                 <Upload size={15} /> Upload Call
                 <input
@@ -337,7 +337,7 @@ export default function App() {
               </label>
             </div>
             <p className="text-xs text-dim mt-3">
-            Drop a consented prerecorded helpline call to see the full analysis flow.
+              Drop a consented prerecorded helpline call to see the full analysis flow.
             </p>
           </>
         )}

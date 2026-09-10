@@ -11,6 +11,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+import os
+
 
 # ===========================================================================
 # Enums
@@ -61,8 +63,6 @@ class TranscriptSegment(BaseModel):
     svi_score: int = Field(..., ge=0, le=100)
     risk_level: RiskLevel
     risk_explanation: list[str] = Field(default_factory=list)
-    emotion_explanation: list[str] = Field(default_factory=list)
-    accent_signals: dict[str, float] | None = None
 
 
 # ===========================================================================
@@ -76,6 +76,14 @@ class SviBreakdown(BaseModel):
     context_component: int = 0
     segment_count: int = 0
     immediate_safety: bool = False
+
+
+class ModelStatus(BaseModel):
+    """Status of each AI model that participated in the analysis."""
+    asr: str = "unknown"
+    text_emotion: str = "unknown"
+    acoustic_emotion: str = "unknown"
+    fusion: str = "unknown"
 
 
 class AnalysisResponse(BaseModel):
@@ -93,7 +101,7 @@ class AnalysisResponse(BaseModel):
     risk_explanation: list[str] = Field(default_factory=list)
     svi_breakdown: SviBreakdown = Field(default_factory=SviBreakdown)
     recommendation: str
-    mode: str = "demo"
+    mode: str = "whisper"
     disclaimer: str = (
         "Assistive risk indicator, not a clinical diagnosis. "
         "High-risk indicators require trained human review."
@@ -101,6 +109,8 @@ class AnalysisResponse(BaseModel):
     immediate_safety_indicators: bool = False
     language: str = "en"
     analyzed_at: str = ""
+    model_status: ModelStatus = Field(default_factory=ModelStatus)
+    detected_language: str = "auto-detected"
 
 
 # ===========================================================================
@@ -110,7 +120,7 @@ class AnalysisResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "traumasense-api"
-    mode: str = "demo"
+    mode: str = "whisper"
 
 
 class ErrorResponse(BaseModel):
@@ -122,14 +132,16 @@ class ErrorResponse(BaseModel):
 # Validation / upload metadata
 # ===========================================================================
 
-ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".ogg", ".webm"}
+ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".webm", ".mp4"}
 
 MIME_HINTS = {
     ".wav": {"audio/wav", "audio/x-wav", "audio/wave"},
     ".mp3": {"audio/mpeg", "audio/mp3"},
     ".m4a": {"audio/mp4", "audio/x-m4a", "audio/mp4a-latm"},
+    ".aac": {"audio/aac", "audio/aacp", "audio/mp4a-latm", "audio/mp4"},
     ".ogg": {"audio/ogg", "audio/vorbis"},
     ".webm": {"audio/webm", "audio/mp4"},
+    ".mp4": {"audio/mp4", "video/mp4"},
 }
 
 
@@ -137,7 +149,3 @@ def is_allowed_extension(filename: str) -> bool:
     """Check whether the file extension is in the supported set."""
     ext = os.path.splitext(filename)[1].lower()
     return ext in ALLOWED_EXTENSIONS
-
-
-#Lazy import to avoid circular dependency at module level
-import os
