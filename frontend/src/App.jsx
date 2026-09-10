@@ -16,7 +16,7 @@ import {
   UserCheck,
   X,
 } from 'lucide-react';
-import { healthCheck, getDemoAnalysis, uploadAndAnalyze, getCase } from './services/api';
+import { healthCheck, uploadAndAnalyze, getCase } from './services/api';
 import Header from './components/Header';
 import ConsentNotice from './components/ConsentNotice';
 import UploadPanel from './components/UploadPanel';
@@ -120,26 +120,7 @@ export default function App() {
     if (progressInterval.current) clearInterval(progressInterval.current);
   };
 
-  // ---- demo mode -------------------------------------------------------
-  const startDemo = async () => {
-    setError(null);
-    setFile(null);
-    setAudioUrl(null);
-    setAudioName('');
-    setAudioSize(0);
-    setAudioDuration(0);
-    setCaseData(null);
-    setActiveTab('dashboard');
-    setCurrentSegment(0);
-    setIsPlaying(false);
-    setProgress(0);
-    if (progressInterval.current) clearInterval(progressInterval.current);
-    // Require consent before demo analysis, same as uploaded file flow.
-    setConsentAck(false);
-    setMode('uploaded');
-  };
-
-  // ---- analyze uploaded file or demo -----------------------------------
+  // ---- analyze uploaded file -----------------------------------------
   const startAnalysis = async () => {
     if (!consentAck) {
       setError('Please acknowledge the consent notice before analysis.');
@@ -151,18 +132,8 @@ export default function App() {
     setProgress(0);
     setCurrentSegment(0);
     try {
-      let data;
-      if (file) {
-        // Real file upload
-        data = await uploadAndAnalyze(file);
-        setAudioDuration(data.duration_seconds || 0);
-      } else {
-        // Demo mode — no file uploaded, load deterministic demo
-        data = await getDemoAnalysis();
-        setAudioDuration(data.duration_seconds || 120);
-        setAudioUrl(null);
-        setFile(null);
-      }
+      const data = await uploadAndAnalyze(file);
+      setAudioDuration(data.duration_seconds || 0);
       setCaseData(data);
       setMode('done');
     } catch (err) {
@@ -300,14 +271,10 @@ export default function App() {
               <div className="flex items-center gap-2 mt-3 text-sm text-muted" style={{ flexWrap: 'wrap' }}>
                 <span className="flex items-center gap-1"><Shield size={13} /> Privacy-first</span>
                 <span className="flex items-center gap-1"><UserCheck size={13} /> Human-in-the-loop</span>
-                <span className="flex items-center gap-1"><WifiOff size={13} /> Demo mode (offline)</span>
               </div>
             </div>
 
             <div className="flex gap-3 flex-wrap">
-              <button className="btn btn-primary" onClick={startDemo}>
-                <WifiOff size={15} /> Start Demo Mode
-              </button>
               <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
                 <Upload size={15} /> Upload Call
                 <input
@@ -320,7 +287,7 @@ export default function App() {
               </label>
             </div>
             <p className="text-xs text-dim mt-3">
-              Drop a consented prerecorded helpline call or try the demo to see the full analysis flow.
+              Drop a consented prerecorded helpline call to analyze it.
             </p>
           </>
         )}
