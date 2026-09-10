@@ -156,7 +156,7 @@ export default function App() {
     setProgress(0);
     const iv = setInterval(() => {
       setProgress(p => {
-        if (p >= 90) { clearInterval(iv); return 90; }
+        if (p >= 99) { clearInterval(iv); return 99; }
         return p + Math.floor(Math.random() * 8) + 3;
       });
     }, 400);

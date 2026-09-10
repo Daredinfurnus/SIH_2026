@@ -62,6 +62,8 @@ app.add_middleware(
         "http://localhost:5177",
         "http://localhost:5178",
         "http://localhost:5179",
+        # LAN access (the IP the frontend is served on)
+        "http://192.168.56.1:5173",
     ],
     allow_methods=["*"],
     allow_headers=["*"],

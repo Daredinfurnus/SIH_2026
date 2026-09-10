@@ -26,6 +26,7 @@ from app.schemas import (
     Emotion,
     ErrorResponse,
     HealthResponse,
+    ModelStatus,
     RiskLevel,
     Speaker,
     SviBreakdown,
@@ -33,6 +34,7 @@ from app.schemas import (
 )
 from app.services.analysis_service import AnalysisService
 from app.services.audio_service import AudioService
+from app.services.normalization_service import normalize_audio, cleanup_normalized
 from app.services.recommendation_service import get_recommendation
 from app.services.risk_service import compute_risk
 from app.services.svi_service import compute_overall_svi
@@ -120,6 +122,7 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
 
     audio_svc = AudioService()
     safe_path = audio_svc.store_temp(file.filename, contents)
+    normalized_path = None
 
     try:
         meta = audio_svc.inspect(safe_path)
@@ -272,13 +275,16 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         # Model status tracking
         asr_status = "success" if raw_segments else "failed"
         
-        # Check NLP status
+        # Check NLP status — derived from config/ai provider, not an in-scope variable
         nlp_status = "unavailable"
-        if nlp_svc is not None:
-            try:
+        try:
+            from app.services.nlp_service import get_nlp_service as _get_nlp
+
+            _nlp = _get_nlp()
+            if _nlp is not None:
                 nlp_status = "success"
-            except Exception:
-                nlp_status = "failed"
+        except Exception:
+            nlp_status = "unavailable"
         
         # Check acoustic status from emotion results
         acoustic_status = "unavailable"
@@ -360,7 +366,6 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             immediate_safety_indicators=immediate_safety,
             language="en",
             analyzed_at=_now_iso(),
-            immediate_safety_indicators=risk_result["immediate_safety_indicators"],
             model_status=ModelStatus(
                 asr=asr_status,
                 text_emotion=nlp_status,
