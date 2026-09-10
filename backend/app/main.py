@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.api.routes import api_router
+from app.services.normalization_service import normalize_audio, cleanup_normalized
 
 app = FastAPI(
     title="TraumaSense API",

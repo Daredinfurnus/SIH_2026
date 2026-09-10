@@ -11,6 +11,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+import os
+
 
 # ===========================================================================
 # Enums
@@ -76,6 +78,14 @@ class SviBreakdown(BaseModel):
     immediate_safety: bool = False
 
 
+class ModelStatus(BaseModel):
+    """Status of each AI model that participated in the analysis."""
+    asr: str = "unknown"
+    text_emotion: str = "unknown"
+    acoustic_emotion: str = "unknown"
+    fusion: str = "unknown"
+
+
 class AnalysisResponse(BaseModel):
     case_id: str
     file_name: str
@@ -99,6 +109,8 @@ class AnalysisResponse(BaseModel):
     immediate_safety_indicators: bool = False
     language: str = "en"
     analyzed_at: str = ""
+    model_status: ModelStatus = Field(default_factory=ModelStatus)
+    detected_language: str = "auto-detected"
 
 
 # ===========================================================================
@@ -120,14 +132,16 @@ class ErrorResponse(BaseModel):
 # Validation / upload metadata
 # ===========================================================================
 
-ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".ogg", ".webm"}
+ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".webm", ".mp4"}
 
 MIME_HINTS = {
     ".wav": {"audio/wav", "audio/x-wav", "audio/wave"},
     ".mp3": {"audio/mpeg", "audio/mp3"},
     ".m4a": {"audio/mp4", "audio/x-m4a", "audio/mp4a-latm"},
+    ".aac": {"audio/aac", "audio/aacp", "audio/mp4a-latm", "audio/mp4"},
     ".ogg": {"audio/ogg", "audio/vorbis"},
     ".webm": {"audio/webm", "audio/mp4"},
+    ".mp4": {"audio/mp4", "video/mp4"},
 }
 
 

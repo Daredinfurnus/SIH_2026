@@ -170,6 +170,7 @@ class SpeechToTextService:
                 "end": seg["end"],
                 "text": seg["text"],
                 "speaker": seg.get("speaker", "caller"),
+                "detected_language": detected_language,
             }
             segments.append(seg_dict)
 

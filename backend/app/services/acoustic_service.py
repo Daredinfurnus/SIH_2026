@@ -13,9 +13,22 @@ importable.
 from __future__ import annotations
 
 import logging
+import subprocess
 from typing import Any, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
+
+def _ffmpeg_available() -> bool:
+    """Check whether ffmpeg is on the system PATH."""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-version"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
 
 if TYPE_CHECKING:
     import torch
@@ -75,11 +88,22 @@ def _extract_audio_features(audio_path: str, start_sec: float, end_sec: float) -
         }
 
     import numpy as np
-    import soundfile as sf
+
+    # Try soundfile first; fall back to wave for WAV files.
+    # For non-PCM formats (AAC, MP4, etc.), use FFmpeg to decode to PCM.
+    audio, sr = None, 0
+    read_error = None
 
     try:
+        import soundfile as sf
         audio, sr = sf.read(audio_path)
-    except Exception:
+    except ImportError:
+        read_error = "soundfile not installed"
+    except Exception as e:
+        read_error = f"soundfile error: {e}"
+
+    if audio is None:
+        # Try wave module (WAV only)
         import wave
         try:
             with wave.open(audio_path, "rb") as wf:
@@ -88,17 +112,44 @@ def _extract_audio_features(audio_path: str, start_sec: float, end_sec: float) -
                 raw = wf.readframes(n)
                 audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
         except Exception:
-            return {
-                "acoustic_stress_score": 0,
-                "acoustic_confidence": 0.0,
-                "acoustic_features": {"error": "could not read audio"},
-            }
+            # Try FFmpeg decoding for non-PCM formats (AAC, MP4, etc.)
+            if read_error:
+                pass  # already have an error, FFmpeg likely won't help
+            else:
+                try:
+                    import tempfile
+                    fd, tmp_wav = tempfile.mkstemp(suffix=".wav", prefix="wav2vec2_decode_")
+                    os.close(fd)
+                    ffmpeg_result = subprocess.run(
+                        [
+                            "ffmpeg", "-y", "-i", audio_path,
+                            "-ac", "1", "-ar", "16000",
+                            "-f", "wav", tmp_wav,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    if ffmpeg_result.returncode == 0:
+                        with wave.open(tmp_wav, "rb") as wf:
+                            n = wf.getnframes()
+                            sr = wf.getframerate()
+                            raw = wf.readframes(n)
+                            audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                        try:
+                            os.remove(tmp_wav)
+                        except OSError:
+                            pass
+                    else:
+                        read_error = f"FFmpeg decode failed: {ffmpeg_result.stderr[-300:]}"
+                except Exception as e:
+                    read_error = f"FFmpeg decode exception: {e}"
 
-    if sr <= 0:
+    if audio is None or sr <= 0:
         return {
             "acoustic_stress_score": 0,
             "acoustic_confidence": 0.0,
-            "acoustic_features": {"error": "invalid sample rate"},
+            "acoustic_features": {"error": read_error or "could not read audio"},
         }
 
     if audio.ndim > 1:

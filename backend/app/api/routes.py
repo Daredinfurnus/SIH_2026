@@ -105,9 +105,20 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         meta = audio_svc.inspect(safe_path)
         duration = meta.get("duration_seconds", 0.0) or 0.0
 
+        # ---- normalization ------------------------------------------------------
+        norm_result = normalize_audio(safe_path, settings.upload_dir)
+        normalized_path = norm_result.get("normalized_path")
+        original_format = norm_result.get("original_format", "unknown")
+        ffmpeg_ok = norm_result.get("ffmpeg_available", False)
+        norm_error = norm_result.get("error")
+
+        if norm_error and not ffmpeg_ok:
+            # FFmpeg unavailable is a warning, not a fatal error — try with original
+            logger.warning("Audio normalization skipped: %s", norm_error)
+
         # ---- STT --------------------------------------------------------
         stt = SpeechToTextService()
-        raw_segments = stt.transcribe(safe_path, language=None, real_upload=True)
+        raw_segments = stt.transcribe(normalized_path or safe_path, language=None, real_upload=True)
 
         if not raw_segments:
             return JSONResponse(
@@ -145,9 +156,11 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                 all_indicators.add(ind)
 
             # ---- Emotion analysis (text + acoustic) ----
+            # Use normalized audio path for acoustic analysis if available
+            audio_for_acoustic = normalized_path or safe_path
             emotion_result = emotion_svc.analyze_segment(
                 text=text,
-                audio_path=safe_path,
+                audio_path=audio_for_acoustic,
                 start_sec=float(seg.get("start", 0)),
                 end_sec=float(seg.get("end", 0)),
             )
@@ -228,6 +241,50 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         )
 
         # ---- build response ---------------------------------------------
+        # Determine detected language from first segment
+        detected_lang = "en"
+        for seg in raw_segments:
+            dl = seg.get("detected_language")
+            if dl and dl not in ("auto-detected", None):
+                detected_lang = dl
+                break
+
+        # Model status tracking
+        asr_status = "success" if raw_segments else "failed"
+        
+        # Check NLP status
+        nlp_status = "unavailable"
+        if nlp_svc is not None:
+            try:
+                nlp_status = "success"
+            except Exception:
+                nlp_status = "failed"
+        
+        # Check acoustic status from emotion results
+        acoustic_status = "unavailable"
+        has_acoustic = any(
+            s.get("emotion_source") in ("acoustic", "fused")
+            for s in analyzed
+        )
+        if has_acoustic:
+            acoustic_status = "success"
+        elif emotion_svc is not None:
+            acoustic_status = "unavailable"  # service exists but no acoustic data
+
+        # Determine fusion mode
+        fusion_mode = "none"
+        text_only = sum(1 for s in analyzed if s.get("emotion_source") == "text")
+        acoustic_only = sum(1 for s in analyzed if s.get("emotion_source") == "acoustic")
+        fused = sum(1 for s in analyzed if s.get("emotion_source") == "fused")
+        if fused > 0:
+            fusion_mode = "multimodal"
+        elif text_only > 0 and acoustic_only > 0:
+            fusion_mode = "multimodal"
+        elif text_only > 0:
+            fusion_mode = "text_only"
+        elif acoustic_only > 0:
+            fusion_mode = "acoustic_only"
+
         case_id = _next_case_id()
         transcript = [
             TranscriptSegment(
@@ -267,12 +324,22 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             mode=stt.provider_name(),
             analyzed_at=_now_iso(),
             immediate_safety_indicators=risk_result["immediate_safety_indicators"],
+            model_status=ModelStatus(
+                asr=asr_status,
+                text_emotion=nlp_status,
+                acoustic_emotion=acoustic_status,
+                fusion=fusion_mode,
+            ),
+            detected_language=detected_lang,
         )
 
         _case_store[case_id] = response.model_dump()
         return response
 
     finally:
+        # Clean up normalized file if we created one
+        if normalized_path and normalized_path != safe_path:
+            cleanup_normalized(normalized_path)
         audio_svc.release(safe_path)
 
 
