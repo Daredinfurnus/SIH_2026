@@ -23,6 +23,7 @@ import AudioPlayer from './components/AudioPlayer';
 import CaseHeader from './components/CaseHeader';
 import AnalysisDashboard from './components/AnalysisDashboard';
 import FinalReport from './components/FinalReport';
+import TranscriptFormatter from './components/TranscriptFormatter';
 import LoadingState from './components/LoadingState';
 import ErrorState from './components/ErrorState';
 import Disclaimer from './components/Disclaimer';
@@ -42,9 +43,12 @@ export default function App() {
   const [currentSegment, setCurrentSegment] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [consentAck, setConsentAck] = useState(false);
-  const [activeTab, setActiveTab] = useState('dashboard'); // dashboard | report
+  const [activeTab, setActiveTab] = useState('dashboard'); // dashboard | report | transcript
   const [backendOnline, setBackendOnline] = useState(true);
   const [progress, setProgress] = useState(0);
+  const [transcriptSegments, setTranscriptSegments] = useState('');
+  const [transcriptFormatted, setTranscriptFormatted] = useState('');
+  const [transcriptCounts, setTranscriptCounts] = useState(null);
 
   const audioRef = useRef(null);
   const progressInterval = useRef(null);
@@ -159,6 +163,53 @@ export default function App() {
     progressInterval.current = iv;
     return () => clearInterval(iv);
   }, [mode]);
+
+  // ---- transcript formatter helpers ------------------------------------
+  function formatTranscriptFromLines(lines) {
+    const LABEL_MAP = {
+      'voice 1': 'Voice 1 (NHAA Official)',
+      'voice 2': 'Voice 2 (Victim)',
+    };
+    function resolveLabel(raw, prevKey) {
+      const key = raw.trim().toLowerCase();
+      if (key in LABEL_MAP) return LABEL_MAP[key];
+      if (!prevKey) return 'Voice 1 (NHAA Official) [assumed]';
+      if (prevKey.startsWith('Voice 1')) return 'Voice 2 (Victim) [assumed]';
+      return 'Voice 1 (NHAA Official) [assumed]';
+    }
+    function parseOne(text) {
+      const t = text.trim();
+      if (!t) return null;
+      let m = t.match(/^\[?\s*(Voice\s*\d+)\s*\]?\s*:?\s*(.*)$/i);
+      if (m) return { label: resolveLabel(m[1], null), body: m[2].trim() };
+      m = t.match(/^(Voice\s*\d+)\s*:?\s*(.*)$/i);
+      if (m) return { label: resolveLabel(m[1], null), body: m[2].trim() };
+      return { label: resolveLabel('', null), body: t };
+    }
+    const blocks = [];
+    let prevKey = null;
+    for (const raw of lines) {
+      const p = parseOne(raw);
+      if (!p || !p.body) continue;
+      const speakerKey = p.label.split(' (')[0];
+      if (blocks.length > 0 && blocks[blocks.length - 1].label.startsWith(speakerKey)) {
+        blocks[blocks.length - 1].text += ' ' + p.body;
+      } else {
+        blocks.push({ label: p.label, text: p.body });
+      }
+      prevKey = speakerKey;
+    }
+    return blocks.map(b => `${b.label}: ${b.text}`).join(' ');
+  }
+
+  function countTranscriptBlocks(formatted) {
+    if (!formatted) return { voice1: 0, voice2: 0, total: 0 };
+    return {
+      voice1: (formatted.match(/Voice 1 \(/g) || []).length,
+      voice2: (formatted.match(/Voice 2 \(/g) || []).length,
+      total: ((formatted.match(/Voice 1 \(/g) || []).length) + ((formatted.match(/Voice 2 \(/g) || []).length),
+    };
+  }
 
   // ---- print report ----------------------------------------------------
   const handlePrint = () => {
@@ -366,6 +417,13 @@ export default function App() {
               >
                 <Printer size={13} /> Final Report
               </button>
+              <button
+                className={`btn btn-sm ${activeTab === 'transcript' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setActiveTab('transcript')}
+              >
+                <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                Transcript Formatter
+              </button>
             </div>
 
             {activeTab === 'dashboard' && (
@@ -381,6 +439,33 @@ export default function App() {
               <FinalReport
                 caseData={caseData}
                 onPrint={handlePrint}
+              />
+            )}
+
+            {activeTab === 'transcript' && (
+              <TranscriptFormatter
+                segments={transcriptSegments}
+                formatted={transcriptFormatted}
+                counts={transcriptCounts}
+                onFormat={({ segments, formatted }) => {
+                  setTranscriptSegments(segments);
+                  if (formatted == null) {
+                    // Compute the formatted output from the raw segments
+                    const lines = segments.split('\n').map(l => l.trim()).filter(Boolean);
+                    const formattedOut = formatTranscriptFromLines(lines);
+                    const counts = countTranscriptBlocks(formattedOut);
+                    setTranscriptFormatted(formattedOut);
+                    setTranscriptCounts(counts);
+                  } else {
+                    setTranscriptFormatted(formatted);
+                    setTranscriptCounts(null);
+                  }
+                }}
+                onClear={() => {
+                  setTranscriptSegments('');
+                  setTranscriptFormatted('');
+                  setTranscriptCounts(null);
+                }}
               />
             )}
 
