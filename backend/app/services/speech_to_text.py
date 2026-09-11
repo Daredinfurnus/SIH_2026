@@ -35,79 +35,149 @@ class SpeechToTextService:
     # ------------------------------------------------------------------
 
     def _whisper_transcript(
-        self, file_path: str, language: str, real_upload: bool
+        self, file_path: str, language: str | None, real_upload: bool
     ) -> list[dict[str, Any]]:
-        """Two-pass language detection: auto-detect → force Indic if needed.
-        VAD filter OFF to prevent CPU hangs on quiet audio."""
+        """Whisper transcription with English/Hindi-only language selection.
+
+        Strategy:
+        1. Auto-detect the language.
+        2. If Whisper detects English or Hindi, use that result.
+        3. If Whisper detects another language (e.g. Urdu), run both
+        English and Hindi and select the stronger decoding using avg_logprob.
+        """
+
         model_size = "base"
+
         try:
             from faster_whisper import WhisperModel
-            model = WhisperModel(model_size, device="cpu", compute_type="int8")
+
+            model = WhisperModel(
+                model_size,
+                device="cpu",
+                compute_type="int8",
+            )
         except Exception:
             return self._build_placeholder_segments(file_path)
 
-        detected_lang = None
-        detected_lang_prob = 0.0
-        best_segments: list[dict[str, Any]] = []
+        # --------------------------------------------------------------
+        # Helper: run Whisper transcription
+        # --------------------------------------------------------------
+        def _run_transcription(
+            forced_language: str | None,
+        ) -> tuple[list[dict[str, Any]], float, str | None, float]:
 
-        # Pass 1: auto-detect
-        try:
-            segments_gen, info = model.transcribe(
-                file_path,
-                language=None,
-                beam_size=5,
-                word_timestamps=False,
-                vad_filter=False,
-                condition_on_previous_text=False,
-            )
-            detected_lang = getattr(info, "language", None)
-            detected_lang_prob = getattr(info, "language_probability", 0.0) or 0.0
-            for seg in segments_gen:
-                text = seg.text.strip()
-                if text:
-                    best_segments.append({
-                        "start": round(seg.start, 2),
-                        "end": round(seg.end, 2),
-                        "text": text,
-                    })
-        except Exception:
-            pass
+            segments_out: list[dict[str, Any]] = []
+            logprobs: list[float] = []
+            detected_language: str | None = None
+            language_probability = 0.0
 
-        # Pass 2: if English detected with low confidence, try Indic languages
-        if detected_lang == "en" and detected_lang_prob <= 0.55:
-            for cand in ["hi", "mr", "ta", "te", "bn", "gu", "pa", "kn", "ml", "ur"]:
-                try:
-                    segs_gen, _ = model.transcribe(
-                        file_path, language=cand, beam_size=5,
-                        word_timestamps=False, vad_filter=False,
-                        condition_on_previous_text=False,
+            try:
+                segments_gen, info = model.transcribe(
+                    file_path,
+                    language=forced_language,
+                    beam_size=5,
+                    word_timestamps=False,
+                    vad_filter=False,
+                    condition_on_previous_text=False,
+                )
+
+                detected_language = getattr(info, "language", None)
+                language_probability = (
+                    getattr(info, "language_probability", 0.0) or 0.0
+                )
+
+                for seg in segments_gen:
+                    text = seg.text.strip()
+
+                    if not text:
+                        continue
+
+                    avg_logprob = getattr(seg, "avg_logprob", -10.0)
+
+                    segments_out.append(
+                        {
+                            "start": round(seg.start, 2),
+                            "end": round(seg.end, 2),
+                            "text": text,
+                            "_avg_logprob": avg_logprob,
+                        }
                     )
-                    seg_list = []
-                    for seg in segs_gen:
-                        text = seg.text.strip()
-                        if text:
-                            seg_list.append({
-                                "start": round(seg.start, 2),
-                                "end": round(seg.end, 2),
-                                "text": text,
-                            })
-                    if seg_list:
-                        total = sum(len(s["text"]) for s in seg_list)
-                        best_total = sum(len(s["text"]) for s in best_segments)
-                        if total > best_total:
-                            best_segments = seg_list
-                            detected_lang = cand
-                            detected_lang_prob = 1.0
-                            break
-                except Exception:
-                    continue
 
+                    logprobs.append(avg_logprob)
+
+            except Exception:
+                return [], -10.0, None, 0.0
+
+            if logprobs:
+                mean_logprob = sum(logprobs) / len(logprobs)
+            else:
+                mean_logprob = -10.0
+
+            return (
+                segments_out,
+                mean_logprob,
+                detected_language,
+                language_probability,
+            )
+
+        # --------------------------------------------------------------
+        # Pass 1: automatic language detection
+        # --------------------------------------------------------------
+        auto_segments, auto_logprob, detected_lang, detected_lang_prob = (
+            _run_transcription(None)
+        )
+
+        # --------------------------------------------------------------
+        # Decide which transcript to use
+        # --------------------------------------------------------------
+        if detected_lang in {"en", "hi"}:
+            # Whisper detected one of our supported languages.
+            best_segments = auto_segments
+
+        else:
+            # Whisper detected something outside our supported languages.
+            # Example: English audio incorrectly detected as Urdu.
+            #
+            # Only compare the two languages supported by our prototype.
+            en_segments, en_logprob, _, _ = _run_transcription("en")
+            hi_segments, hi_logprob, _, _ = _run_transcription("hi")
+
+            if not en_segments and not hi_segments:
+                best_segments = auto_segments
+
+            elif not hi_segments:
+                best_segments = en_segments
+                detected_lang = "en"
+
+            elif not en_segments:
+                best_segments = hi_segments
+                detected_lang = "hi"
+
+            elif en_logprob >= hi_logprob:
+                best_segments = en_segments
+                detected_lang = "en"
+
+            else:
+                best_segments = hi_segments
+                detected_lang = "hi"
+
+        # --------------------------------------------------------------
+        # Fallback
+        # --------------------------------------------------------------
         if not best_segments:
             return self._build_placeholder_segments(file_path)
 
-        detected_language = detected_lang if detected_lang else "auto-detected"
+        # Remove internal scoring information.
+        for seg in best_segments:
+            seg.pop("_avg_logprob", None)
 
-        # Adaptive merge: 15-20s segments, sentence/paragraph aware
+        # Safety fallback.
+        if detected_lang not in {"en", "hi"}:
+            detected_lang = "en"
+
+        # --------------------------------------------------------------
+        # Adaptive merge: 15–20s segments, sentence/paragraph aware
+        # --------------------------------------------------------------
         MIN_SEG = 15.0
         HARD_CAP = 22.0
         SENTENCE_END = {".", "!", "?", ":", ";"}
@@ -119,6 +189,7 @@ class SpeechToTextService:
             return "\n\n" in text or "\r\n\r\n" in text
 
         merged: list[dict[str, Any]] = []
+
         buf_start = best_segments[0]["start"]
         buf_end = best_segments[0]["end"]
         buf_text = best_segments[0]["text"]
@@ -127,54 +198,58 @@ class SpeechToTextService:
             seg_start = seg["start"]
             seg_end = seg["end"]
             seg_text = seg["text"]
+
             buf_duration = buf_end - buf_start
             buf_text_end = buf_text.rstrip()
+
             flush = False
+
             if _is_sentence_end(buf_text):
                 flush = True
+
             elif _is_new_paragraph(buf_text):
                 flush = True
+
             elif buf_duration >= MIN_SEG:
                 flush = True
+
             elif (seg_end - buf_start) >= HARD_CAP:
                 flush = True
+
             if flush:
-                merged.append({
-                    "start": round(buf_start, 2),
-                    "end": round(buf_end, 2),
-                    "text": buf_text_end,
-                    "speaker": "caller",
-                })
+                merged.append(
+                    {
+                        "start": round(buf_start, 2),
+                        "end": round(buf_end, 2),
+                        "text": buf_text_end,
+                    }
+                )
+
                 buf_start = seg_start
                 buf_end = seg_end
                 buf_text = seg_text
+
             else:
                 buf_end = seg_end
-                buf_text = f"{buf_text} {seg_text}"
+                buf_text = f"{buf_text_end} {seg_text}".strip()
 
+        # Add final buffer.
         if buf_text.strip():
-            merged.append({
-                "start": round(buf_start, 2),
-                "end": round(buf_end, 2),
-                "text": buf_text.strip(),
-                "speaker": "caller",
-            })
+            merged.append(
+                {
+                    "start": round(buf_start, 2),
+                    "end": round(buf_end, 2),
+                    "text": buf_text.strip(),
+                }
+            )
 
-        if not merged:
-            return self._build_placeholder_segments(file_path)
+        # --------------------------------------------------------------
+        # Speaker placeholder
+        # --------------------------------------------------------------
+        for segment in merged:
+            segment["speaker"] = "caller"
 
-        segments = []
-        for seg in merged:
-            seg_dict: dict[str, Any] = {
-                "start": seg["start"],
-                "end": seg["end"],
-                "text": seg["text"],
-                "speaker": seg.get("speaker", "caller"),
-                "detected_language": detected_language,
-            }
-            segments.append(seg_dict)
-
-        return segments
+        return merged
 
     # ------------------------------------------------------------------
     # Placeholder segments
