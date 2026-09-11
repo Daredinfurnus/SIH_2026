@@ -15,6 +15,7 @@ for feature extraction to ensure compatibility.
 from __future__ import annotations
 
 import json
+import math
 import logging
 import os
 from typing import Any
@@ -32,7 +33,19 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-LID_CONFIDENCE_THRESHOLD = 0.65
+LID_CONFIDENCE_THRESHOLD = 0.35
+
+# Chunked LID is used when whole-recording confidence is weak.
+LID_CHUNK_SECONDS = 8.0
+LID_CHUNK_STEP_SECONDS = 4.0
+LID_MIN_CHUNK_SECONDS = 2.0
+
+# Ignore genuinely silent/near-silent chunks.
+LID_MIN_RMS = 0.003
+
+# Prevent very long recordings from causing excessive LID inference.
+LID_MAX_CHUNKS = 24
+
 SUPPORTED_LANGUAGES = frozenset({"en", "hi"})
 
 MODELS_DIR = os.path.normpath(
@@ -256,40 +269,123 @@ class _VoxLinguaModel:
         logger.info("LID bundle saved to %s", LID_BUNDLE_PATH)
 
     def predict(self, audio_path: str) -> dict[str, Any]:
-        """Run LID inference using the VoxLingua107 model with matching features."""
+        """Run VoxLingua107 prediction on an audio file."""
+        audio, sr = _load_audio_mono_16k(audio_path)
+        return self.predict_array(audio, sr)
+
+    def predict_array(
+        self,
+        audio: np.ndarray,
+        sr: int,
+    ) -> dict[str, Any]:
+        """
+        Run VoxLingua107 prediction directly on an audio array.
+
+        Uses the same Fbank, sentence normalization, ECAPA-TDNN,
+        classifier, and label mapping as file-based prediction.
+        """
         if not self._loaded:
             self.load()
 
-        # Load audio as torch tensor (batch, time)
-        audio, sr = _load_audio_mono_16k(audio_path)
-        waveform = torch.from_numpy(audio).float().unsqueeze(0)  # (1, time)
+        if self.compute_features is None:
+            raise RuntimeError(
+                "VoxLingua107 feature extractor is not initialized."
+            )
 
-        # Compute Fbank features — output is (batch, time, n_mels=60)
+        if self.mean_var_norm is None:
+            raise RuntimeError(
+                "VoxLingua107 normalizer is not initialized."
+            )
+
+        if self.embedding_model is None:
+            raise RuntimeError(
+                "VoxLingua107 embedding model is not initialized."
+            )
+
+        if self.classifier is None:
+            raise RuntimeError(
+                "VoxLingua107 classifier is not initialized."
+            )
+
+        if self.label_map is None:
+            raise RuntimeError(
+                "VoxLingua107 label map is not initialized."
+            )
+
+        audio = np.asarray(audio, dtype=np.float32)
+
+        if audio.ndim > 1:
+            audio = np.mean(audio, axis=-1)
+
+        audio = np.nan_to_num(
+            audio,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+
+        if audio.size == 0:
+            raise ValueError(
+                "Cannot run VoxLingua107 on empty audio."
+            )
+
+        # All model inputs must be 16 kHz.
+        if sr != 16000:
+            import librosa
+
+            audio = librosa.resample(
+                audio,
+                orig_sr=sr,
+                target_sr=16000,
+            )
+            sr = 16000
+
+        waveform = (
+            torch.from_numpy(audio)
+            .float()
+            .unsqueeze(0)
+            .to(self.device)
+        )
+
+        # ----------------------------------------------------------
+        # Exact VoxLingua feature/model pipeline.
+        # ----------------------------------------------------------
         with torch.no_grad():
-            features = self.compute_features(waveform)  # (1, T, 60)
+            features = self.compute_features(waveform)
 
-            # Apply sentence-level mean normalization
-            features = self.mean_var_norm(features, torch.tensor([features.shape[1]], device=self.device))
+            features = self.mean_var_norm(
+                features,
+                torch.tensor(
+                    [features.shape[1]],
+                    device=self.device,
+                ),
+            )
 
-            # ECAPA-TDNN.forward expects (batch, time, channel) = (1, T, 60) — already correct
             embedding = self.embedding_model(features)
             logits = self.classifier(embedding)
-            probs = torch.softmax(logits, dim=-1).squeeze()
 
-        top_idx = torch.argmax(probs).item()
-        top_conf = probs[top_idx].item()
+            probs = torch.softmax(
+                logits,
+                dim=-1,
+            ).squeeze()
 
-        # Label indices in label_encoder.txt start at 0 (no offset)
-        # The classifier outputs 107 logits, and argmax directly maps to label index
+        top_idx = int(torch.argmax(probs).item())
+        top_conf = float(probs[top_idx].item())
+
         language_code = "unknown"
+
         for label, idx in self.label_map.items():
             if idx == top_idx:
-                language_code = label.split(":")[0].strip().lower()
+                language_code = (
+                    label.split(":")[0]
+                    .strip()
+                    .lower()
+                )
                 break
 
         return {
             "language": language_code,
-            "confidence": round(float(top_conf), 3),
+            "confidence": round(top_conf, 3),
         }
 
 
@@ -310,33 +406,359 @@ class LanguageIdentifier:
         self._vox_error: str | None = None
 
     def identify(self, audio_path: str) -> dict[str, Any]:
-        """Identify the spoken language of an audio file."""
+        """
+        Identify spoken language using whole-audio LID first, then
+        speech-focused chunks when the whole recording is uncertain.
+
+        English and Hindi are the only routable languages.
+        Whisper is never used for language identification.
+        """
         if not self._vox_available:
             self._ensure_vox()
 
-        if self._vox_available and self._vox_model is not None:
-            try:
-                result = self._vox_model.predict(audio_path)
-                result["model_available"] = True
-                result["supported"] = result["language"] in SUPPORTED_LANGUAGES
-                if result["confidence"] < LID_CONFIDENCE_THRESHOLD:
-                    result["language"] = "language_uncertain"
-                    result["supported"] = False
-                result["note"] = f"VoxLingua107: {result['language']}/{result['confidence']}"
-                return result
-            except Exception as exc:
-                logger.error("VoxLingua107 inference failed: %s", exc, exc_info=True)
-                self._vox_available = False
-                self._vox_error = str(exc)
+        if not self._vox_available or self._vox_model is None:
+            return {
+                "language": "language_uncertain",
+                "confidence": 0.0,
+                "supported": False,
+                "model_available": False,
+                "note": f"LID unavailable: {self._vox_error or 'unknown'}",
+            }
 
-        # If we get here, VoxLingua107 is not available
-        return {
-            "language": "language_uncertain",
-            "confidence": 0.0,
-            "supported": False,
-            "model_available": False,
-            "note": f"LID unavailable: {self._vox_error or 'unknown'}",
-        }
+        try:
+            # ----------------------------------------------------------
+            # 1. Whole-recording prediction
+            # ----------------------------------------------------------
+            whole_result = self._vox_model.predict(audio_path)
+
+            whole_language = whole_result.get("language", "unknown")
+
+            try:
+                whole_confidence = float(
+                    whole_result.get("confidence", 0.0) or 0.0
+                )
+            except (TypeError, ValueError):
+                whole_confidence = 0.0
+
+            if not math.isfinite(whole_confidence):
+                whole_confidence = 0.0
+
+            whole_confidence = max(
+                0.0,
+                min(1.0, whole_confidence),
+            )
+
+            # A strong supported prediction does not need chunking.
+            if (
+                whole_language in SUPPORTED_LANGUAGES
+                and whole_confidence >= LID_CONFIDENCE_THRESHOLD
+            ):
+                return {
+                    "language": whole_language,
+                    "confidence": round(whole_confidence, 3),
+                    "supported": True,
+                    "model_available": True,
+                    "note": (
+                        "VoxLingua107 whole-audio decision: "
+                        f"{whole_language}/{whole_confidence:.3f}"
+                    ),
+                }
+
+            # ----------------------------------------------------------
+            # 2. Load audio for chunk-level analysis
+            # ----------------------------------------------------------
+            import soundfile as sf
+
+            audio, sr = sf.read(
+                audio_path,
+                dtype="float32",
+                always_2d=False,
+            )
+
+            if audio.ndim > 1:
+                audio = audio.mean(axis=-1)
+
+            audio = np.asarray(audio, dtype=np.float32)
+
+            if audio.size == 0:
+                return {
+                    "language": "language_uncertain",
+                    "confidence": 0.0,
+                    "supported": False,
+                    "model_available": True,
+                    "note": "Audio contains no samples.",
+                }
+
+            if sr != 16000:
+                import librosa
+
+                audio = librosa.resample(
+                    audio,
+                    orig_sr=sr,
+                    target_sr=16000,
+                )
+                sr = 16000
+
+            # Remove NaN/Inf before calculating RMS.
+            audio = np.nan_to_num(
+                audio,
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            ).astype(np.float32)
+
+            # ----------------------------------------------------------
+            # 3. Generate candidate chunks
+            #
+            # We use RMS only as a cheap speech/energy gate.
+            # This is NOT language detection.
+            # ----------------------------------------------------------
+            chunk_size = max(
+                1,
+                int(LID_CHUNK_SECONDS * sr),
+            )
+            step_size = max(
+                1,
+                int(LID_CHUNK_STEP_SECONDS * sr),
+            )
+            min_chunk_size = max(
+                1,
+                int(LID_MIN_CHUNK_SECONDS * sr),
+            )
+
+            candidates: list[np.ndarray] = []
+
+            for start in range(
+                0,
+                len(audio),
+                step_size,
+            ):
+                chunk = audio[start:start + chunk_size]
+
+                if len(chunk) < min_chunk_size:
+                    continue
+
+                rms = float(
+                    np.sqrt(np.mean(np.square(chunk))) + 1e-12
+                )
+
+                if not math.isfinite(rms):
+                    continue
+
+                if rms < LID_MIN_RMS:
+                    continue
+
+                candidates.append(chunk)
+
+            if not candidates:
+                return {
+                    "language": "language_uncertain",
+                    "confidence": round(whole_confidence, 3),
+                    "supported": False,
+                    "model_available": True,
+                    "note": (
+                        "No sufficiently audible speech chunks were "
+                        "available for chunk-level language identification."
+                    ),
+                }
+
+            # ----------------------------------------------------------
+            # 4. Cap the number of expensive model inferences.
+            #
+            # Select chunks distributed across the recording rather
+            # than processing only the beginning.
+            # ----------------------------------------------------------
+            if len(candidates) > LID_MAX_CHUNKS:
+                indices = np.linspace(
+                    0,
+                    len(candidates) - 1,
+                    num=LID_MAX_CHUNKS,
+                    dtype=int,
+                )
+                candidates = [
+                    candidates[int(i)]
+                    for i in indices
+                ]
+
+            # ----------------------------------------------------------
+            # 5. Run VoxLingua on each usable chunk
+            # ----------------------------------------------------------
+            language_scores: dict[str, list[float]] = {
+                "en": [],
+                "hi": [],
+            }
+
+            supported_chunk_count = 0
+
+            for chunk in candidates:
+                chunk_result = self._vox_model.predict_array(
+                    chunk,
+                    sr,
+                )
+
+                chunk_language = str(
+                    chunk_result.get("language", "unknown")
+                ).strip().lower()
+
+                try:
+                    chunk_confidence = float(
+                        chunk_result.get("confidence", 0.0) or 0.0
+                    )
+                except (TypeError, ValueError):
+                    chunk_confidence = 0.0
+
+                if not math.isfinite(chunk_confidence):
+                    chunk_confidence = 0.0
+
+                chunk_confidence = max(
+                    0.0,
+                    min(1.0, chunk_confidence),
+                )
+
+                if chunk_language in language_scores:
+                    language_scores[chunk_language].append(
+                        chunk_confidence
+                    )
+                    supported_chunk_count += 1
+
+            # ----------------------------------------------------------
+            # 6. No EN/HI evidence
+            # ----------------------------------------------------------
+            if supported_chunk_count == 0:
+                return {
+                    "language": "language_uncertain",
+                    "confidence": 0.0,
+                    "supported": False,
+                    "model_available": True,
+                    "note": (
+                        "VoxLingua107 found audible speech, but did not "
+                        "produce usable English/Hindi evidence."
+                    ),
+                }
+
+            en_scores = language_scores["en"]
+            hi_scores = language_scores["hi"]
+
+            en_mean = (
+                float(np.mean(en_scores))
+                if en_scores
+                else 0.0
+            )
+
+            hi_mean = (
+                float(np.mean(hi_scores))
+                if hi_scores
+                else 0.0
+            )
+
+            # Sum of confidence is useful because it considers both
+            # confidence and the amount of supporting evidence.
+            en_weight = float(np.sum(en_scores))
+            hi_weight = float(np.sum(hi_scores))
+
+            if en_weight >= hi_weight:
+                final_language = "en"
+                winning_scores = en_scores
+                losing_scores = hi_scores
+                winning_weight = en_weight
+                losing_weight = hi_weight
+            else:
+                final_language = "hi"
+                winning_scores = hi_scores
+                losing_scores = en_scores
+                winning_weight = hi_weight
+                losing_weight = en_weight
+
+            if not winning_scores:
+                return {
+                    "language": "language_uncertain",
+                    "confidence": 0.0,
+                    "supported": False,
+                    "model_available": True,
+                    "note": "No winning supported-language evidence.",
+                }
+
+            # ----------------------------------------------------------
+            # 7. Confidence calculation
+            # ----------------------------------------------------------
+            mean_confidence = float(
+                np.mean(winning_scores)
+            )
+
+            total_weight = (
+                winning_weight + losing_weight
+            )
+
+            agreement = (
+                winning_weight / total_weight
+                if total_weight > 0.0
+                else 0.0
+            )
+
+            # Strong confidence + agreement across chunks.
+            combined_confidence = (
+                0.75 * mean_confidence
+                + 0.25 * agreement
+            )
+
+            combined_confidence = max(
+                0.0,
+                min(1.0, combined_confidence),
+            )
+
+            # ----------------------------------------------------------
+            # 8. Require the final aggregated decision to clear
+            # the tolerant threshold.
+            # ----------------------------------------------------------
+            if combined_confidence < LID_CONFIDENCE_THRESHOLD:
+                return {
+                    "language": "language_uncertain",
+                    "confidence": round(combined_confidence, 3),
+                    "supported": False,
+                    "model_available": True,
+                    "note": (
+                        "Chunked VoxLingua107 analysis remained "
+                        f"uncertain: confidence={combined_confidence:.3f}; "
+                        f"chunks={len(candidates)}; "
+                        f"en_mean={en_mean:.3f}; "
+                        f"hi_mean={hi_mean:.3f}; "
+                        f"agreement={agreement:.3f}"
+                    ),
+                }
+
+            return {
+                "language": final_language,
+                "confidence": round(combined_confidence, 3),
+                "supported": True,
+                "model_available": True,
+                "note": (
+                    "VoxLingua107 chunked decision: "
+                    f"{final_language}/{combined_confidence:.3f}; "
+                    f"chunks={len(candidates)}; "
+                    f"supported_chunks={supported_chunk_count}; "
+                    f"en_mean={en_mean:.3f}; "
+                    f"hi_mean={hi_mean:.3f}; "
+                    f"agreement={agreement:.3f}"
+                ),
+            }
+
+        except Exception as exc:
+            logger.error(
+                "VoxLingua107 inference failed: %s",
+                exc,
+                exc_info=True,
+            )
+
+            self._vox_available = False
+            self._vox_error = str(exc)
+
+            return {
+                "language": "language_uncertain",
+                "confidence": 0.0,
+                "supported": False,
+                "model_available": False,
+                "note": f"LID inference failed: {exc}",
+            }
 
     def _ensure_vox(self) -> None:
         """Try to load the VoxLingua107 model."""
@@ -376,65 +798,176 @@ def get_language_identifier() -> LanguageIdentifier:
 # ---------------------------------------------------------------------------
 
 def route_language(lid_result: dict[str, Any]) -> dict[str, Any]:
-    """Convert an LID result into an ASR routing decision.
-
-    Returns:
-        dict with: route, language, reason, halt
-
-    en  -> Whisper
-    hi  -> IndicConformer
-    ur  -> REJECTED
-    other/unsupported -> REJECTED
-
-    When model_available=False, falls back to Whisper auto-detect (route="auto").
     """
-    model_available = lid_result.get("model_available", True)
-    language = lid_result.get("language", "language_uncertain")
-    confidence = lid_result.get("confidence", 0.0)
-    supported = lid_result.get("supported", False)
+    Convert authoritative VoxLingua107 LID output into an ASR routing decision.
 
-    if not model_available:
-        return {
-            "route": "auto",
-            "language": "auto-detected",
-            "reason": "LID model unavailable -- using Whisper auto-detection for language routing.",
-            "halt": False,
-        }
+    Supported:
+        en -> Faster-Whisper (forced language="en")
+        hi -> IndicConformer (forced language="hi")
 
-    if language == "language_uncertain" or not supported:
+    Rejected:
+        ur -> unsupported
+        any language other than en/hi -> unsupported
+        low-confidence detection -> rejected
+        unavailable/failed LID -> rejected
+
+    IMPORTANT:
+        Whisper is NEVER used for language detection or language routing.
+        There is NO automatic-language-detection fallback.
+        The pipeline fails closed whenever authoritative LID is unavailable
+        or cannot produce a confident supported language.
+    """
+
+    # --------------------------------------------------------------
+    # Validate LID result itself.
+    # --------------------------------------------------------------
+    if not isinstance(lid_result, dict):
         return {
             "route": "unsupported",
-            "language": language,
+            "language": "language_uncertain",
+            "confidence": 0.0,
+            "reason": "Invalid language identification result.",
+            "halt": True,
+        }
+
+    # --------------------------------------------------------------
+    # Extract and sanitize authoritative LID values.
+    # --------------------------------------------------------------
+    model_available = bool(lid_result.get("model_available", False))
+
+    language = lid_result.get("language")
+    if not isinstance(language, str):
+        language = "language_uncertain"
+    else:
+        language = language.strip().lower()
+
+    try:
+        confidence = float(lid_result.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    # Reject NaN / infinity rather than allowing them through the gate.
+    if not math.isfinite(confidence):
+        confidence = 0.0
+
+    # Keep confidence in a valid probability range.
+    confidence = max(0.0, min(1.0, confidence))
+
+    supported = bool(lid_result.get("supported", False))
+
+    # --------------------------------------------------------------
+    # LID model MUST be available.
+    # Never run ASR without authoritative language identification.
+    # --------------------------------------------------------------
+    if not model_available:
+        return {
+            "route": "unsupported",
+            "language": "language_uncertain",
+            "confidence": confidence,
             "reason": (
-                "Language not supported or too uncertain to route. "
-                "Currently supported: English (en), Hindi (hi)."
+                "Language identification model is unavailable. "
+                "ASR routing is halted because the language cannot "
+                "be determined safely."
             ),
             "halt": True,
         }
 
+    # --------------------------------------------------------------
+    # Confidence gate.
+    # --------------------------------------------------------------
+    if confidence < LID_CONFIDENCE_THRESHOLD:
+        return {
+            "route": "unsupported",
+            "language": language,
+            "confidence": confidence,
+            "reason": (
+                f"Language identification confidence "
+                f"{confidence:.3f} is below the required "
+                f"threshold of {LID_CONFIDENCE_THRESHOLD:.2f}."
+            ),
+            "halt": True,
+        }
+
+    # --------------------------------------------------------------
+    # Only English and Hindi are supported.
+    #
+    # This explicitly rejects Urdu and every other language.
+    # --------------------------------------------------------------
+    if language not in SUPPORTED_LANGUAGES:
+        return {
+            "route": "unsupported",
+            "language": language,
+            "confidence": confidence,
+            "reason": (
+                f"Detected language '{language}' is not supported. "
+                "Currently supported languages are English (en) "
+                "and Hindi (hi)."
+            ),
+            "halt": True,
+        }
+
+    # --------------------------------------------------------------
+    # The LID service must agree that the detected language is
+    # supported. This prevents contradictory LID output from being
+    # routed accidentally.
+    # --------------------------------------------------------------
+    if not supported:
+        return {
+            "route": "unsupported",
+            "language": language,
+            "confidence": confidence,
+            "reason": (
+                f"Language identification reported '{language}', "
+                "but marked it as unsupported. ASR routing is halted."
+            ),
+            "halt": True,
+        }
+
+    # --------------------------------------------------------------
+    # English -> Faster-Whisper.
+    # The ASR layer MUST receive language="en".
+    # --------------------------------------------------------------
     if language == "en":
         return {
             "route": "en",
             "language": "en",
-            "reason": "English speech -- routed to Faster-Whisper (language=en).",
+            "confidence": confidence,
+            "reason": (
+                "English speech detected by VoxLingua107. "
+                "Route to Faster-Whisper with language='en'."
+            ),
             "halt": False,
         }
 
+    # --------------------------------------------------------------
+    # Hindi -> IndicConformer.
+    # The ASR layer MUST receive language="hi".
+    # --------------------------------------------------------------
     if language == "hi":
         return {
             "route": "hi",
             "language": "hi",
-            "reason": "Hindi speech -- routed to IndicConformer (language=hi).",
+            "confidence": confidence,
+            "reason": (
+                "Hindi speech detected by VoxLingua107. "
+                "Route to IndicConformer with language='hi'."
+            ),
             "halt": False,
         }
 
-    # Any other language (including ur) -- reject
+    # --------------------------------------------------------------
+    # Defensive fail-closed path.
+    #
+    # This should be unreachable because SUPPORTED_LANGUAGES is
+    # restricted to {"en", "hi"}, but keeping this makes the function
+    # safe if the supported-language configuration changes later.
+    # --------------------------------------------------------------
     return {
         "route": "unsupported",
         "language": language,
+        "confidence": confidence,
         "reason": (
-            f"Detected language '{language}' is not supported. "
-            "Currently supported: English (en), Hindi (hi)."
+            f"Language '{language}' cannot be routed safely."
         ),
         "halt": True,
     }

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import time
+import math
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -200,55 +201,386 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             logger.warning("Audio normalization skipped: %s", norm_error)
 
         # ---- language identification (BEFORE ASR) ----------------------
-        # Run a dedicated spoken-language identification stage before ASR
-        # so that the application controls routing, not Whisper's internal
-        # language detector.  This prevents Whisper from misidentifying
-        # Hindi/Urdu-like speech as Urdu and then falling back to an
-        # en/hi logprob comparison (the Urdu misrouting path).
         #
-        # When LID is unavailable, the pipeline falls back to Whisper
-        # auto-detection for backward compatibility.  When LID runs but
-        # reports an unsupported language (e.g. Urdu) or is too uncertain,
-        # the pipeline is halted before ASR.
-        try:
-            lid = get_language_identifier()
-            lid_result = lid.identify(normalized_path or safe_path)
-        except Exception as exc:
-            logger.warning("LID stage failed, falling back to Whisper auto-detect: %s", exc)
-            lid_result = {"language": "language_uncertain", "confidence": 0.0, "supported": False, "model_available": False}
+        # VoxLingua107 is the ONLY authority for language routing.
+        #
+        # Supported:
+        #   en -> Faster-Whisper
+        #   hi -> IndicConformer
+        #
+        # Unsupported:
+        #   ur / every other language
+        #
+        # If LID fails, is unavailable, uncertain, or unsupported:
+        # STOP.
+        #
+        # Whisper MUST NEVER perform language detection or routing.
 
-        # If LID model is not available, fall back to Whisper auto-detect.
-        if not lid_result.get("model_available", True):
-            logger.info("LID model unavailable — falling back to Whisper auto-detection")
-            routing = {"route": "auto", "language": "auto-detected", "halt": False}
-        else:
-            routing = route_language(lid_result)
+        audio_path = normalized_path or safe_path
 
-        if routing.get("halt"):
-            # Unsupported or uncertain language — stop before ASR.
+        if not audio_path:
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content=ErrorResponse(
-                    detail=routing.get("reason", "Unsupported language."),
-                    error_code="UNSUPPORTED_LANGUAGE",
+                    detail="No valid audio path is available for language identification.",
+                    error_code="INVALID_AUDIO",
                 ).model_dump(),
             )
 
-        # ---- speech-to-text----------------------------------------------
-        stt = SpeechToTextService()
-        forced_lang: str | None = None
-        if routing.get("route") in {"en", "hi"}:
-            forced_lang = routing["route"]
-        raw_segments = stt.transcribe(
-            normalized_path or safe_path, language=forced_lang, real_upload=True
-        )
+        # --------------------------------------------------------------
+        # Run authoritative language identification.
+        # --------------------------------------------------------------
+        try:
+            lid = get_language_identifier()
+            lid_result = lid.identify(audio_path)
 
-        if not raw_segments:
+        except Exception:
+            logger.exception(
+                "Language identification failed for audio=%s",
+                audio_path,
+            )
+
             return JSONResponse(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content=ErrorResponse(
-                    detail="Speech-to-text returned no segments.",
-                    error_code="STT_EMPTY",
+                    detail=(
+                        "Language identification failed. "
+                        "ASR was not executed."
+                    ),
+                    error_code="LANGUAGE_DETECTION_FAILED",
+                ).model_dump(),
+            )
+
+        # --------------------------------------------------------------
+        # Validate the LID response before using it.
+        # --------------------------------------------------------------
+        if not isinstance(lid_result, dict):
+            logger.error(
+                "Invalid LID result type: %s",
+                type(lid_result).__name__,
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=ErrorResponse(
+                    detail=(
+                        "Language identification returned an invalid result. "
+                        "ASR was not executed."
+                    ),
+                    error_code="LANGUAGE_DETECTION_FAILED",
+                ).model_dump(),
+            )
+
+        # --------------------------------------------------------------
+        # LID model MUST be available.
+        #
+        # Never run ASR without authoritative LID.
+        # --------------------------------------------------------------
+        if not bool(lid_result.get("model_available", False)):
+            logger.error(
+                "Language identification model unavailable."
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=ErrorResponse(
+                    detail=(
+                        "Language identification model is unavailable. "
+                        "ASR was not executed."
+                    ),
+                    error_code="LANGUAGE_DETECTION_FAILED",
+                ).model_dump(),
+            )
+
+        # --------------------------------------------------------------
+        # Convert authoritative LID output into an ASR route.
+        #
+        # route_language() is fail-closed:
+        #   en -> en
+        #   hi -> hi
+        #   everything else -> halt
+        # --------------------------------------------------------------
+        try:
+            routing = route_language(lid_result)
+
+        except Exception:
+            logger.exception(
+                "Language routing failed. LID result=%r",
+                lid_result,
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=ErrorResponse(
+                    detail=(
+                        "Language routing failed. "
+                        "ASR was not executed."
+                    ),
+                    error_code="LANGUAGE_DETECTION_FAILED",
+                ).model_dump(),
+            )
+
+        # --------------------------------------------------------------
+        # Routing MUST be a valid dictionary.
+        # --------------------------------------------------------------
+        if not isinstance(routing, dict):
+            logger.error(
+                "Invalid language routing result: %r",
+                routing,
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=ErrorResponse(
+                    detail=(
+                        "Language routing returned an invalid decision. "
+                        "ASR was not executed."
+                    ),
+                    error_code="LANGUAGE_DETECTION_FAILED",
+                ).model_dump(),
+            )
+
+        # --------------------------------------------------------------
+        # Log the authoritative language-routing decision.
+        # --------------------------------------------------------------
+        logger.info(
+            "LANGUAGE ROUTING: lid_language=%s confidence=%.3f route=%s",
+            lid_result.get("language"),
+            float(lid_result.get("confidence", 0.0)),
+            routing.get("route"),
+        )
+
+
+        # --------------------------------------------------------------
+        # Halt on:
+        #   - low confidence
+        #   - uncertain language
+        #   - Urdu
+        #   - unsupported language
+        #   - any other fail-closed condition
+        # --------------------------------------------------------------
+        if bool(routing.get("halt", True)):
+            language = routing.get(
+                "language",
+                lid_result.get("language", "language_uncertain"),
+            )
+
+            if not isinstance(language, str):
+                language = "language_uncertain"
+
+            language = language.strip().lower()
+
+            try:
+                confidence = float(
+                    lid_result.get("confidence", 0.0) or 0.0
+                )
+            except (TypeError, ValueError):
+                confidence = 0.0
+
+            # Treat malformed confidence as uncertain.
+            if not math.isfinite(confidence):
+                confidence = 0.0
+
+            # ----------------------------------------------------------
+            # Low-confidence / uncertain language.
+            # ----------------------------------------------------------
+            if (
+                language == "language_uncertain"
+                or confidence < LID_CONFIDENCE_THRESHOLD
+            ):
+                error_code = "LANGUAGE_CONFIDENCE_TOO_LOW"
+
+            # ----------------------------------------------------------
+            # Explicitly unsupported language.
+            # This includes Urdu and every language outside en/hi.
+            # ----------------------------------------------------------
+            else:
+                error_code = "UNSUPPORTED_LANGUAGE"
+
+            logger.warning(
+                "ASR halted by language routing: "
+                "language=%s confidence=%.3f reason=%s",
+                language,
+                confidence,
+                routing.get("reason", "No reason provided."),
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                content=ErrorResponse(
+                    detail=routing.get(
+                        "reason",
+                        "Language is unsupported or insufficiently confident.",
+                    ),
+                    error_code=error_code,
+                ).model_dump(),
+            )
+
+        # --------------------------------------------------------------
+        # The router MUST explicitly return one of:
+        #
+        #   "en" -> Faster-Whisper
+        #   "hi" -> IndicConformer
+        #
+        # Anything else is an internal routing failure.
+        # --------------------------------------------------------------
+        forced_lang = routing.get("language")
+
+        if forced_lang not in {"en", "hi"}:
+            logger.error(
+                "Invalid ASR routing decision: route=%r language=%r",
+                routing.get("route"),
+                forced_lang,
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=ErrorResponse(
+                    detail=(
+                        "Invalid ASR routing decision. "
+                        "ASR was not executed."
+                    ),
+                    error_code="LANGUAGE_DETECTION_FAILED",
+                ).model_dump(),
+            )
+
+        # --------------------------------------------------------------
+        # Make sure the route itself agrees with the language.
+        # --------------------------------------------------------------
+        if routing.get("route") != forced_lang:
+            logger.error(
+                "Inconsistent ASR routing decision: %r",
+                routing,
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=ErrorResponse(
+                    detail=(
+                        "Inconsistent language routing decision. "
+                        "ASR was not executed."
+                    ),
+                    error_code="LANGUAGE_DETECTION_FAILED",
+                ).model_dump(),
+            )
+
+        # --------------------------------------------------------------
+        # speech-to-text
+        #
+        # IMPORTANT:
+        # forced_lang is authoritative.
+        #
+        # en -> Faster-Whisper(language="en")
+        # hi -> IndicConformer(language="hi")
+        #
+        # There is NO language=None / auto-detect path.
+        # --------------------------------------------------------------
+        stt = SpeechToTextService()
+
+        try:
+            raw_segments = stt.transcribe(
+                audio_path,
+                language=forced_lang,
+            )
+
+        except RuntimeError as exc:
+            logger.exception(
+                "ASR failed for language=%s",
+                forced_lang,
+            )
+
+            message = str(exc)
+            message_lower = message.lower()
+
+            if "model load failed" in message_lower:
+                error_code = "ASR_MODEL_LOAD_FAILED"
+            else:
+                error_code = "ASR_INFERENCE_FAILED"
+
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=ErrorResponse(
+                    detail=message or "Speech-to-text inference failed.",
+                    error_code=error_code,
+                ).model_dump(),
+            )
+
+        except ValueError as exc:
+            # Invalid language/audio/model input should not be reported
+            # as a successful analysis.
+            logger.exception(
+                "Invalid ASR input for language=%s",
+                forced_lang,
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                content=ErrorResponse(
+                    detail=str(exc) or "Invalid speech-to-text input.",
+                    error_code="ASR_INFERENCE_FAILED",
+                ).model_dump(),
+            )
+
+        except Exception as exc:
+            logger.exception(
+                "Unexpected ASR failure for language=%s",
+                forced_lang,
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=ErrorResponse(
+                    detail=f"Speech-to-text failed: {exc}",
+                    error_code="ASR_INFERENCE_FAILED",
+                ).model_dump(),
+            )
+
+        # --------------------------------------------------------------
+        # ASR MUST return actual segments.
+        #
+        # No placeholder/fake transcript is allowed.
+        # --------------------------------------------------------------
+        if raw_segments is None:
+            logger.error(
+                "ASR returned None for language=%s",
+                forced_lang,
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=ErrorResponse(
+                    detail="Speech-to-text returned no result.",
+                    error_code="EMPTY_TRANSCRIPT",
+                ).model_dump(),
+            )
+
+        if not isinstance(raw_segments, (list, tuple)):
+            logger.error(
+                "ASR returned invalid segment type: %s",
+                type(raw_segments).__name__,
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=ErrorResponse(
+                    detail=(
+                        "Speech-to-text returned an invalid segment result."
+                    ),
+                    error_code="ASR_INFERENCE_FAILED",
+                ).model_dump(),
+            )
+
+        if len(raw_segments) == 0:
+            logger.warning(
+                "ASR returned zero segments for language=%s",
+                forced_lang,
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                content=ErrorResponse(
+                    detail="No speech could be transcribed from the audio.",
+                    error_code="EMPTY_TRANSCRIPT",
                 ).model_dump(),
             )
 
@@ -328,15 +660,34 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         # ---- build AnalysisResponse (legacy shape) from engine result -------
         case_id = _next_case_id()
 
-        # detected language — from routing decision if available
-        detected_lang = routing.get("language", "auto-detected")
-        if detected_lang == "auto":
-            detected_lang = "auto-detected"
-        for seg in raw_segments:
-            dl = seg.get("detected_language")
-            if dl and dl not in ("auto-detected", None):
-                detected_lang = dl
-                break
+                # --------------------------------------------------------------
+        # Detected language
+        #
+        # forced_lang is the authoritative language selected by
+        # VoxLingua107 before ASR.
+        #
+        # Never use Whisper's detected_language field.
+        # Never use auto-detection.
+        # Never default to English.
+        # --------------------------------------------------------------
+        detected_lang = forced_lang
+
+        if detected_lang not in {"en", "hi"}:
+            logger.error(
+                "Invalid language state after ASR: %r",
+                detected_lang,
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=ErrorResponse(
+                    detail=(
+                        "Invalid language state after speech-to-text. "
+                        "Analysis was not completed."
+                    ),
+                    error_code="LANGUAGE_DETECTION_FAILED",
+                ).model_dump(),
+            )
 
         # model status
         asr_status = "success" if raw_segments else "failed"
@@ -445,7 +796,7 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                 "High-risk indicators require trained human review."
             ),
             immediate_safety_indicators=engine_result["overall"]["safety_immediate_flag"],
-            language=detected_lang if detected_lang != "auto-detected" else "en",
+            language=detected_lang,
             analyzed_at=_now_iso(),
             model_status=ModelStatus(
                 asr=asr_status,
