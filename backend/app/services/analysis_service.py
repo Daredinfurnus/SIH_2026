@@ -349,6 +349,9 @@ def _looks_like_non_latin(text: str) -> bool:
             or 0x0A00 <= cp <= 0x0A7F  # Gurmukhi (Punjabi)
             or 0x0B00 <= cp <= 0x0B7F  # Oriya
             or 0x0900 <= cp <= 0x097F  # Sinhala
+            or 0x0600 <= cp <= 0x06FF  # Arabic (Urdu/Hindī in Nastaʿlīq)
+            or 0x0750 <= cp <= 0x077F  # Arabic Supplement
+            or 0x08A0 <= cp <= 0x08FF  # Arabic Extended-A
         ):
             return True
 

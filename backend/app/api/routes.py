@@ -8,6 +8,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -21,18 +22,23 @@ from app.schemas import (
     Emotion,
     ErrorResponse,
     HealthResponse,
+    ModelStatus,
     RiskLevel,
     Speaker,
     TranscriptSegment,
 )
 from app.services.analysis_service import AnalysisService
 from app.services.audio_service import AudioService
+from app.services.normalization_service import normalize_audio, cleanup_normalized
 from app.services.recommendation_service import get_recommendation
 from app.services.risk_service import compute_risk
 from app.services.svi_service import compute_overall_svi
 from app.services.speech_to_text import SpeechToTextService
 from app.services.emotion_service import get_emotion_service
+from app.services.nlp_service import get_nlp_service
 from app.utils.validation import validate_upload
+
+logger = logging.getLogger(__name__)
 
 api_router = APIRouter()
 
@@ -100,6 +106,8 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
 
     audio_svc = AudioService()
     safe_path = audio_svc.store_temp(file.filename, contents)
+
+    normalized_path = None
 
     try:
         meta = audio_svc.inspect(safe_path)
@@ -254,11 +262,12 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         
         # Check NLP status
         nlp_status = "unavailable"
-        if nlp_svc is not None:
-            try:
+        try:
+            nlp_svc = get_nlp_service() if get_nlp_service else None
+            if nlp_svc is not None:
                 nlp_status = "success"
-            except Exception:
-                nlp_status = "failed"
+        except Exception:
+            nlp_status = "failed"
         
         # Check acoustic status from emotion results
         acoustic_status = "unavailable"
@@ -330,6 +339,7 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                 acoustic_emotion=acoustic_status,
                 fusion=fusion_mode,
             ),
+            language=detected_lang,
             detected_language=detected_lang,
         )
 
