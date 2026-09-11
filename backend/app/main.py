@@ -51,20 +51,18 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # CORS — only the development origins we actually use
 # ---------------------------------------------------------------------------
+_dev_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://localhost:5175",
-        "http://localhost:5176",
-        "http://localhost:5177",
-        "http://localhost:5178",
-        "http://localhost:5179",
-        # LAN access (the IP the frontend is served on)
-        "http://192.168.56.1:5173",
-    ],
+    allow_origins=_dev_origins + settings.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],

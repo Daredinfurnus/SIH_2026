@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: traumasense-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: STT_MODEL_SIZE
+        value: tiny
+      - key: ENABLE_NLP
+        value: "false"
+      - key: ENABLE_ACOUSTIC
+        value: "false"
+      - key: MAX_UPLOAD_SIZE_MB
+        value: "25"
+      - key: CORS_ORIGINS
+        sync: false
