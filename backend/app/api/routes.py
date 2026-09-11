@@ -434,6 +434,544 @@ def get_case(case_id: str) -> dict[str, Any] | None:
 
 
 # ===========================================================================
+# Demo mode — deterministic pre-built case for quick onboarding / offline
+# ===========================================================================
+
+_DEMO_CASE: dict[str, Any] = {
+    "case_id": "CASE-26093-DEMO-0001",
+    "file_name": "demo_call.wav",
+    "duration_seconds": 120.0,
+    "transcript": [
+        {
+            "start": 0.0,
+            "end": 15.0,
+            "text": "Hello, I would like to report an incident. I am not feeling well at all.",
+            "speaker": "caller",
+            "stress_score": 42,
+            "distress_score": 38,
+            "emotion": "Anxiety",
+            "confidence": 0.72,
+            "indicators": ["anxiety", "uncertainty"],
+            "svi_score": 39,
+            "risk_level": "MODERATE",
+            "risk_explanation": [
+                "Elevated concern in initial contact. Conversation shows anxiety and uncertainty."
+            ],
+            "emotion_explanation": [
+                "Text-based emotion: Anxiety (IndicBERT similarity 0.72, confidence 0.72)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 15.0,
+            "end": 30.0,
+            "text": "They came to my house last night. They threatened my family. I am scared to sleep.",
+            "speaker": "caller",
+            "stress_score": 78,
+            "distress_score": 72,
+            "emotion": "Fear",
+            "confidence": 0.88,
+            "indicators": [
+                "fear", "threat-related context", "safety concern",
+                "sleep disturbance", "helplessness"
+            ],
+            "svi_score": 76,
+            "risk_level": "HIGH",
+            "risk_explanation": [
+                "Fear-related language detected. Threat-related context present. Sleep disturbance indicator.",
+                "Safety concern flagged — caller reports threats against family.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Fear (text 0.88/0.65, acoustic 62/100/0.45)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 30.0,
+            "end": 45.0,
+            "text": "I do not know where to go. No one will help us. We have nowhere safe to stay.",
+            "speaker": "caller",
+            "stress_score": 85,
+            "distress_score": 88,
+            "emotion": "Helplessness",
+            "confidence": 0.91,
+            "indicators": [
+                "helplessness", "isolation", "safety concern",
+                "threat-related context", "hopelessness"
+            ],
+            "svi_score": 87,
+            "risk_level": "CRITICAL",
+            "risk_explanation": [
+                "High distress indicators across the conversation.",
+                "Helplessness and isolation indicators present.",
+                "Safety concern flagged — caller reports no safe place to stay.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Helplessness (text 0.91/0.70, acoustic 70/100/0.50)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 45.0,
+            "end": 60.0,
+            "text": "They said they will come back. I am alone with my children. I do not know what to do.",
+            "speaker": "caller",
+            "stress_score": 90,
+            "distress_score": 92,
+            "emotion": "Fear",
+            "confidence": 0.94,
+            "indicators": [
+                "fear", "safety concern", "immediate safety indicators",
+                "helplessness", "isolation", "threat-related context"
+            ],
+            "svi_score": 93,
+            "risk_level": "CRITICAL",
+            "risk_explanation": [
+                "Immediate safety indicators detected — trained human review required.",
+                "SVI score 93/100 — at or above the 75-point Critical threshold.",
+                "Fear and helplessness indicators both elevated.",
+                "Caller is alone with children and reports imminent threat.",
+                "Trained human review required immediately.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Fear (text 0.94/0.72, acoustic 78/100/0.55)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 60.0,
+            "end": 75.0,
+            "text": "I called because I do not know who else to call. Please help us.",
+            "speaker": "caller",
+            "stress_score": 82,
+            "distress_score": 85,
+            "emotion": "Distress",
+            "confidence": 0.89,
+            "indicators": [
+                "distress", "helplessness", "safety concern",
+                "isolation"
+            ],
+            "svi_score": 86,
+            "risk_level": "CRITICAL",
+            "risk_explanation": [
+                "High distress indicators with multiple stress signals.",
+                "Helplessness and isolation indicators present.",
+                "Safety concern flagged.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Distress (text 0.89/0.62, acoustic 68/100/0.48)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 75.0,
+            "end": 90.0,
+            "text": "They threatened to hurt my children if I speak to anyone. I am scared to go home.",
+            "speaker": "caller",
+            "stress_score": 93,
+            "distress_score": 95,
+            "emotion": "Fear",
+            "confidence": 0.96,
+            "indicators": [
+                "fear", "safety concern", "immediate safety indicators",
+                "threat-related context", "helplessness", "isolation"
+            ],
+            "svi_score": 95,
+            "risk_level": "CRITICAL",
+            "risk_explanation": [
+                "Immediate safety indicators detected — trained human review required.",
+                "SVI score 95/100 — at or above the 75-point Critical threshold.",
+                "Fear, threat-related context, and safety concern all elevated.",
+                "Caller reports direct threats against children.",
+                "Trained human review required immediately.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Fear (text 0.96/0.74, acoustic 82/100/0.58)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 90.0,
+            "end": 105.0,
+            "text": "I have been crying every night. I cannot eat. I keep thinking about what they said.",
+            "speaker": "caller",
+            "stress_score": 75,
+            "distress_score": 88,
+            "emotion": "Distress",
+            "confidence": 0.87,
+            "indicators": [
+                "distress", "sleep disturbance", "hopelessness",
+                "safety concern"
+            ],
+            "svi_score": 83,
+            "risk_level": "HIGH",
+            "risk_explanation": [
+                "Distress component 88 is the primary driver.",
+                "Sleep disturbance and hopelessness indicators present.",
+                "Safety concern flagged.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Distress (text 0.87/0.60, acoustic 65/100/0.46)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 105.0,
+            "end": 120.0,
+            "text": "Thank you for listening. I feel a little better after talking. I will try to find a safe place.",
+            "speaker": "caller",
+            "stress_score": 55,
+            "distress_score": 52,
+            "emotion": "Anxiety",
+            "confidence": 0.75,
+            "indicators": ["anxiety", "safety concern", "isolation"],
+            "svi_score": 53,
+            "risk_level": "HIGH",
+            "risk_explanation": [
+                "Partial stabilisation noted — caller reports feeling a little better.",
+                "However, stress and distress remain elevated.",
+                "Safety concern and isolation indicators persist.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Anxiety (text 0.75/0.55, acoustic 45/100/0.38)"
+            ],
+            "accent_signals": None,
+        },
+    ],
+    "overall_stress_score": 75,
+    "overall_distress_score": 75,
+    "overall_svi_score": 78,
+    "overall_risk_score": 78,
+    "overall_risk_level": "HIGH",
+    "overall_confidence": 0.87,
+    "overall_indicators": [
+        "anxiety", "distress", "fear", "helplessness",
+        "hopelessness", "isolation", "safety concern",
+        "sleep disturbance", "threat-related context", "immediate safety indicators",
+    ],
+    "risk_explanation": [
+        "SVI score 78/100 — at or above the 75-point High threshold.",
+        "Distress component 75 and stress component 75 both elevated.",
+        "Immediate safety indicators detected at multiple points in the conversation.",
+        "Fear, helplessness, and threat-related context detected across segments.",
+        "Caller reports threats against family and children.",
+        "Sleep disturbance and hopelessness indicators present.",
+        "Partial stabilisation noted in final segment, but overall risk remains HIGH.",
+        "Trained human review recommended.",
+    ],
+    "svi_breakdown": {
+        "stress_component": 22,
+        "distress_component": 28,
+        "safety_component": 18,
+        "context_component": 10,
+        "segment_count": 8,
+        "immediate_safety": True,
+    },
+    "recommendation": (
+        "High stress and distress indicators detected. "
+        "Professional routing and priority human review recommended. "
+        "Immediate safety indicators detected — prioritise immediate human review. "
+        "Consider immediate counsellor handoff and safety planning for the caller and children."
+    ),
+    "mode": "demo",
+    "disclaimer": (
+        "Assistive risk indicator, not a clinical diagnosis. "
+        "High-risk indicators require trained human review."
+    ),
+    "immediate_safety_indicators": True,
+    "language": "en",
+    "analyzed_at": "2026-09-11T12:00:00+00:00",
+    "model_status": {
+        "asr": "success",
+        "text_emotion": "success",
+        "acoustic_emotion": "success",
+        "fusion": "multimodal",
+    },
+    "detected_language": "en",
+}
+
+
+@api_router.get("/demo", response_model=AnalysisResponse)
+def get_demo_case() -> AnalysisResponse:
+    """Return a deterministic demo case for quick onboarding and offline demos.
+
+    No audio upload required — returns a pre-built 8-segment conversation
+    showing a realistic progression from moderate concern to critical risk
+    with partial stabilisation at the end.
+    """
+    return AnalysisResponse(**_DEMO_CASE)
+
+
+# ===========================================================================
+# Demo mode — deterministic pre-built case for judge flow
+# ===========================================================================
+
+_DEMO_CASE: dict[str, Any] = {
+    "case_id": "CASE-26093-DEMO-0001",
+    "file_name": "demo_call.wav",
+    "duration_seconds": 120.0,
+    "transcript": [
+        {
+            "start": 0.0,
+            "end": 15.0,
+            "text": "Hello, I would like to report an incident. I am not feeling well at all.",
+            "speaker": "caller",
+            "stress_score": 42,
+            "distress_score": 38,
+            "emotion": "Anxiety",
+            "confidence": 0.72,
+            "indicators": ["anxiety", "uncertainty"],
+            "svi_score": 39,
+            "risk_level": "MODERATE",
+            "risk_explanation": [
+                "Elevated concern in initial contact. Conversation shows anxiety and uncertainty."
+            ],
+            "emotion_explanation": [
+                "Text-based emotion: Anxiety (IndicBERT similarity 0.72, confidence 0.72)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 15.0,
+            "end": 30.0,
+            "text": "They came to my house last night. They threatened my family. I am scared to sleep.",
+            "speaker": "caller",
+            "stress_score": 78,
+            "distress_score": 72,
+            "emotion": "Fear",
+            "confidence": 0.88,
+            "indicators": [
+                "fear", "threat-related context", "safety concern",
+                "sleep disturbance", "helplessness"
+            ],
+            "svi_score": 76,
+            "risk_level": "HIGH",
+            "risk_explanation": [
+                "Fear-related language detected. Threat-related context present. Sleep disturbance indicator.",
+                "Safety concern flagged — caller reports threats against family.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Fear (text 0.88/0.65, acoustic 62/100/0.45)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 30.0,
+            "end": 45.0,
+            "text": "I do not know where to go. No one will help us. We have nowhere safe to stay.",
+            "speaker": "caller",
+            "stress_score": 85,
+            "distress_score": 88,
+            "emotion": "Helplessness",
+            "confidence": 0.91,
+            "indicators": [
+                "helplessness", "isolation", "safety concern",
+                "threat-related context", "hopelessness"
+            ],
+            "svi_score": 87,
+            "risk_level": "CRITICAL",
+            "risk_explanation": [
+                "High distress indicators across the conversation.",
+                "Helplessness and isolation indicators present.",
+                "Safety concern flagged — caller reports no safe place to stay.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Helplessness (text 0.91/0.70, acoustic 70/100/0.50)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 45.0,
+            "end": 60.0,
+            "text": "They said they will come back. I am alone with my children. I do not know what to do.",
+            "speaker": "caller",
+            "stress_score": 90,
+            "distress_score": 92,
+            "emotion": "Fear",
+            "confidence": 0.94,
+            "indicators": [
+                "fear", "safety concern", "immediate safety indicators",
+                "helplessness", "isolation", "threat-related context"
+            ],
+            "svi_score": 93,
+            "risk_level": "CRITICAL",
+            "risk_explanation": [
+                "Immediate safety indicators detected — trained human review required.",
+                "SVI score 93/100 — at or above the 75-point Critical threshold.",
+                "Fear and helplessness indicators both elevated.",
+                "Caller is alone with children and reports imminent threat.",
+                "Trained human review required immediately.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Fear (text 0.94/0.72, acoustic 78/100/0.55)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 60.0,
+            "end": 75.0,
+            "text": "I called because I do not know who else to call. Please help us.",
+            "speaker": "caller",
+            "stress_score": 82,
+            "distress_score": 85,
+            "emotion": "Distress",
+            "confidence": 0.89,
+            "indicators": [
+                "distress", "helplessness", "safety concern",
+                "isolation"
+            ],
+            "svi_score": 86,
+            "risk_level": "CRITICAL",
+            "risk_explanation": [
+                "High distress indicators with multiple stress signals.",
+                "Helplessness and isolation indicators present.",
+                "Safety concern flagged.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Distress (text 0.89/0.62, acoustic 68/100/0.48)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 75.0,
+            "end": 90.0,
+            "text": "They threatened to hurt my children if I speak to anyone. I am scared to go home.",
+            "speaker": "caller",
+            "stress_score": 93,
+            "distress_score": 95,
+            "emotion": "Fear",
+            "confidence": 0.96,
+            "indicators": [
+                "fear", "safety concern", "immediate safety indicators",
+                "threat-related context", "helplessness", "isolation"
+            ],
+            "svi_score": 95,
+            "risk_level": "CRITICAL",
+            "risk_explanation": [
+                "Immediate safety indicators detected — trained human review required.",
+                "SVI score 95/100 — at or above the 75-point Critical threshold.",
+                "Fear, threat-related context, and safety concern all elevated.",
+                "Caller reports direct threats against children.",
+                "Trained human review required immediately.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Fear (text 0.96/0.74, acoustic 82/100/0.58)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 90.0,
+            "end": 105.0,
+            "text": "I have been crying every night. I cannot eat. I keep thinking about what they said.",
+            "speaker": "caller",
+            "stress_score": 75,
+            "distress_score": 88,
+            "emotion": "Distress",
+            "confidence": 0.87,
+            "indicators": [
+                "distress", "sleep disturbance", "hopelessness",
+                "safety concern"
+            ],
+            "svi_score": 83,
+            "risk_level": "HIGH",
+            "risk_explanation": [
+                "Distress component 88 is the primary driver.",
+                "Sleep disturbance and hopelessness indicators present.",
+                "Safety concern flagged.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Distress (text 0.87/0.60, acoustic 65/100/0.46)"
+            ],
+            "accent_signals": None,
+        },
+        {
+            "start": 105.0,
+            "end": 120.0,
+            "text": "Thank you for listening. I feel a little better after talking. I will try to find a safe place.",
+            "speaker": "caller",
+            "stress_score": 55,
+            "distress_score": 52,
+            "emotion": "Anxiety",
+            "confidence": 0.75,
+            "indicators": ["anxiety", "safety concern", "isolation"],
+            "svi_score": 53,
+            "risk_level": "HIGH",
+            "risk_explanation": [
+                "Partial stabilisation noted — caller reports feeling a little better.",
+                "However, stress and distress remain elevated.",
+                "Safety concern and isolation indicators persist.",
+            ],
+            "emotion_explanation": [
+                "Fused emotion: Anxiety (text 0.75/0.55, acoustic 45/100/0.38)"
+            ],
+            "accent_signals": None,
+        },
+    ],
+    "overall_stress_score": 75,
+    "overall_distress_score": 75,
+    "overall_svi_score": 78,
+    "overall_risk_score": 78,
+    "overall_risk_level": "HIGH",
+    "overall_confidence": 0.87,
+    "overall_indicators": [
+        "anxiety", "distress", "fear", "helplessness",
+        "hopelessness", "isolation", "safety concern",
+        "sleep disturbance", "threat-related context", "immediate safety indicators",
+    ],
+    "risk_explanation": [
+        "SVI score 78/100 — at or above the 75-point High threshold.",
+        "Distress component 75 and stress component 75 both elevated.",
+        "Immediate safety indicators detected at multiple points in the conversation.",
+        "Fear, helplessness, and threat-related context detected across segments.",
+        "Caller reports threats against family and children.",
+        "Sleep disturbance and hopelessness indicators present.",
+        "Partial stabilisation noted in final segment, but overall risk remains HIGH.",
+        "Trained human review recommended.",
+    ],
+    "svi_breakdown": {
+        "stress_component": 22,
+        "distress_component": 28,
+        "safety_component": 18,
+        "context_component": 10,
+        "segment_count": 8,
+        "immediate_safety": True,
+    },
+    "recommendation": (
+        "High stress and distress indicators detected. "
+        "Professional routing and priority human review recommended. "
+        "Immediate safety indicators detected — prioritise immediate human review. "
+        "Consider immediate counsellor handoff and safety planning for the caller and children."
+    ),
+    "mode": "demo",
+    "disclaimer": (
+        "Assistive risk indicator, not a clinical diagnosis. "
+        "High-risk indicators require trained human review."
+    ),
+    "immediate_safety_indicators": True,
+    "language": "en",
+    "analyzed_at": "2026-09-11T12:00:00+00:00",
+    "model_status": {
+        "asr": "success",
+        "text_emotion": "success",
+        "acoustic_emotion": "success",
+        "fusion": "multimodal",
+    },
+    "detected_language": "en",
+}
+
+
+@api_router.get("/demo", response_model=AnalysisResponse)
+def get_demo_case() -> AnalysisResponse:
+    """Return a deterministic demo case for judge demonstrations.
+
+    No audio upload required — returns a pre-built 8-segment conversation
+    showing a realistic progression from moderate concern to critical risk
+    with partial stabilisation at the end.
+    """
+    return AnalysisResponse(**_DEMO_CASE)
+
+
+# ===========================================================================
 # Internal helpers
 # ===========================================================================
 
