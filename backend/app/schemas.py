@@ -220,6 +220,9 @@ class ModelStatus(BaseModel):
     text_emotion: str = "unknown"
     acoustic_emotion: str = "unknown"
     fusion: str = "unknown"
+    svr: str = "unknown"
+    lid_method: str = "unknown"
+    lid_confidence: float = 0.0
 
 
 class TranscriptSegment(BaseModel):
