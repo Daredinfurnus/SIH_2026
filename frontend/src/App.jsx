@@ -49,6 +49,8 @@ export default function App() {
   const [transcriptSegments, setTranscriptSegments] = useState('');
   const [transcriptFormatted, setTranscriptFormatted] = useState('');
   const [transcriptCounts, setTranscriptCounts] = useState(null);
+  const [lidInfo, setLidInfo] = useState(null);
+  const [svrInfo, setSvrInfo] = useState(null);
 
   const audioRef = useRef(null);
   const progressInterval = useRef(null);
@@ -138,6 +140,8 @@ export default function App() {
       const data = await uploadAndAnalyze(file);
       setAudioDuration(data.duration_seconds || 0);
       setCaseData(data);
+      setLidInfo({
+        la...[truncated]
       setMode('done');
     } catch (err) {
       setError(err.message || 'Analysis failed. Please try again.');
@@ -312,15 +316,37 @@ export default function App() {
               </div>
             </div>
 
-            <div className="card mb-4">
-              <p style={{ fontSize: 13, color: 'var(--subtle)', lineHeight: 1.6 }}>
-                TraumaSense analyzes <strong>consented helpline conversations</strong> to identify stress, distress
-                and contextual conversational indicators, and provide an <strong>assistive risk assessment</strong>
-                for trained human review.
-              </p>
-              <div className="flex items-center gap-2 mt-3 text-sm text-muted" style={{ flexWrap: 'wrap' }}>
-                <span className="flex items-center gap-1"><Shield size={13} /> Privacy-first</span>
-                <span className="flex items-center gap-1"><UserCheck size={13} /> Human-in-the-loop</span>
+            <div className="card mb-4" style={{ background: 'rgba(75, 110, 245, 0.04)', border: '1px solid rgba(75, 110, 245, 0.12)' }}>
+              <div className="flex items-center gap-3">
+                <Brain size={20} color="#4B6EF5" />
+                <div>
+                  <h3 style={{ fontSize: 14, fontWeight: 600, color: '#4B6EF5', margin: 0 }}>Language & Model Status</h3>
+                  <div style={{ fontSize: 12, color: 'var(--subtle)', marginTop: 4 }}>
+                    {caseData.model_status && (
+                      <>
+                        <span style={{ color: caseData.model_status.lid_method === 'voxlingua107' ? '#4ade80' : '#fbbf24' }}>
+                          LID: {caseData.model_status.lid_method || 'unknown'} (confidence {Math.round((caseData.model_status.lid_confidence || 0) * 100)}%)
+                        </span>
+                        {' · '}
+                        <span style={{ color: caseData.model_status.asr === 'success' ? '#4ade80' : '#f87171' }}>
+                          ASR: {caseData.model_status.asr}
+                        </span>
+                        {' · '}
+                        <span style={{ color: caseData.model_status.text_emotion === 'success' ? '#4ade80' : '#f87171' }}>
+                          NLP: {caseData.model_status.text_emotion}
+                        </span>
+                        {' · '}
+                        <span style={{ color: caseData.model_status.acoustic_emotion === 'success' ? '#4ade80' : '#f87171' }}>
+                          Acoustic: {caseData.model_status.acoustic_emotion}
+                        </span>
+                        {' · '}
+                        <span style={{ color: caseData.model_status.svr === 'success' ? '#4ade80' : '#f87171' }}>
+                          SVR: {caseData.model_status.svr}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 
