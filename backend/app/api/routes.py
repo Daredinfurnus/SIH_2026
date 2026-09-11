@@ -86,20 +86,22 @@ def _build_risk_explanation(
     """Build human-readable risk explanation from engine results."""
     parts: list[str] = []
     if immediate_safety:
-        parts.append("Immediate safety indicators detected — trained human review required.")
+        parts.append(
+            "Immediate safety indicators detected — trained human review required."
+        )
     if safety_severity == "IMMEDIATE_CONCERN":
         parts.append(f"Safety severity: IMMEDIATE CONCERN. SVI: {int(svi_score)}/100.")
     elif safety_severity == "ELEVATED_CONCERN":
         parts.append(f"Safety severity: ELEVATED CONCERN. SVI: {int(svi_score)}/100.")
     elif safety_severity == "GENERAL_CONCERN":
         parts.append(f"Safety concern noted. SVI: {int(svi_score)}/100.")
-    
+
     # Add dimension explanations
     if explanations:
         stress_exp = explanations.get("stress", {})
         distress_exp = explanations.get("distress", {})
         svi_exp = explanations.get("svi", {})
-        
+
         if stress_exp.get("score", 0) > 50:
             parts.append(
                 f"Elevated stress indicators detected (score: {int(stress_exp['score'])}/100)."
@@ -112,13 +114,13 @@ def _build_risk_explanation(
             parts.append(
                 f"Higher vulnerability indicators detected (SVI: {int(svi_exp['svi_final'])}/100)."
             )
-    
+
     if not parts:
         parts.append(
             f"Overall assessment: {risk_level} risk (SVI: {int(svi_score)}/100). "
             "Assistive indicator — trained human review recommended for clinical interpretation."
         )
-    
+
     return parts
 
 
@@ -294,15 +296,19 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
 
         # model status
         asr_status = "success" if raw_segments else "failed"
+
+        # Check NLP status — derived from config/ai provider
         nlp_status = "unavailable"
         try:
             from app.services.nlp_service import get_nlp_service as _get_nlp
+
             _nlp = _get_nlp()
             if _nlp is not None:
                 nlp_status = "success"
         except Exception:
             nlp_status = "unavailable"
 
+        # Check acoustic status from emotion results
         acoustic_status = "unavailable"
         has_acoustic = any(
             s.get("emotion_source") in ("acoustic", "fused")
