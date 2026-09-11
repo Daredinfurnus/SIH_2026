@@ -33,3 +33,7 @@ export function uploadAndAnalyze(file) {
 export function getCase(caseId) {
   return request(`/cases/${caseId}`);
 }
+
+export function getDemoCase() {
+  return request('/demo');
+}

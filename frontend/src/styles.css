@@ -43,6 +43,8 @@
 
 html, body, #root {
   height: 100%;
+  margin: 0;
+  padding: 0;
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font);
@@ -108,8 +110,8 @@ html, body, #root {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: #000000;
-  border-bottom: 1px solid #000000;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
   height: 44px;
 }
 
