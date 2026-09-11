@@ -45,6 +45,11 @@ from app.services.scoring_engine import (
     ScoringPipeline,
     build_features_from_analysis_segment,
 )
+from app.services.svr_pipeline import (
+    extract_features_from_segments,
+    predict_conversation_risk,
+)
+from app.services.svr_validation import validate_feature_vector
 from app.utils.validation import validate_upload
 
 api_router = APIRouter()
@@ -195,10 +200,44 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         if norm_error and not ffmpeg_ok:
             logger.warning("Audio normalization skipped: %s", norm_error)
 
+        # ---- language identification ----------------------------------------
+        # Run LID before ASR. The LID layer is the single authoritative
+        # router for language selection. Only English (en) and Hindi (hi)
+        # are supported application languages. Everything else is rejected
+        # and the pipeline stops before any ASR is executed.
+        from app.services.lid_service import identify_language
+
+        lid_result = identify_language(normalized_path or safe_path)
+        lid_lang = lid_result.get("language")
+        lid_supported = lid_result.get("supported", False)
+        lid_method = lid_result.get("method", "unknown")
+        lid_confidence = lid_result.get("confidence", 0.0)
+
+        logger.info(
+            "LID result: language=%s confidence=%.3f supported=%s method=%s",
+            lid_lang, lid_confidence, lid_supported, lid_method,
+        )
+
+        if not lid_supported:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=ErrorResponse(
+                    detail=(
+                        f"Unsupported language for analysis. "
+                        f"LID identified '{lid_lang or 'unknown'}' "
+                        f"(confidence {lid_confidence:.2f}, method {lid_method}). "
+                        f"Only English (en) and Hindi (hi) are supported."
+                    ),
+                    error_code="UNSUPPORTED_LANGUAGE",
+                ).model_dump(),
+            )
+
+        target_language = lid_lang  # "en" or "hi"
+
         # ---- speech-to-text ------------------------------------------------
         stt = SpeechToTextService()
         raw_segments = stt.transcribe(
-            normalized_path or safe_path, language=None, real_upload=True
+            normalized_path or safe_path, language=target_language, real_upload=True
         )
 
         if not raw_segments:
@@ -286,13 +325,29 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         # ---- build AnalysisResponse (legacy shape) from engine result -------
         case_id = _next_case_id()
 
-        # detected language
-        detected_lang = "en"
-        for seg in raw_segments:
-            dl = seg.get("detected_language")
-            if dl and dl not in ("auto-detected", None):
-                detected_lang = dl
-                break
+        # detected language — from LID result, NOT from Whisper
+        detected_lang = lid_lang or "en"
+
+        # ---- SVR feature extraction + prediction ---------------------------
+        svr_result = predict_conversation_risk(
+            segments=segments_for_engine,
+            aggregation="mean",
+        )
+        svr_available = svr_result["svr_available"]
+        svr_prediction = svr_result["svr_prediction"]
+        svr_feature_vector = svr_result["feature_vector"]
+        svr_error = svr_result.get("error")
+
+        # Validate feature vector
+        feature_validation = validate_feature_vector(svr_feature_vector)
+        feature_valid = feature_validation["valid"]
+
+        # Use SVR prediction as risk score if available; fall back to scoring engine
+        if svr_available and svr_prediction is not None and feature_valid:
+            svr_risk = float(svr_prediction)
+            svr_risk = max(0.0, min(100.0, svr_risk))
+        else:
+            svr_risk = None  # use scoring engine's SVI as primary
 
         # model status
         asr_status = "success" if raw_segments else "failed"
@@ -397,13 +452,16 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                 "High-risk indicators require trained human review."
             ),
             immediate_safety_indicators=engine_result["overall"]["safety_immediate_flag"],
-            language="en",
+            language=detected_lang,
             analyzed_at=_now_iso(),
             model_status=ModelStatus(
                 asr=asr_status,
                 text_emotion=nlp_status,
                 acoustic_emotion=acoustic_status,
                 fusion=fusion_mode,
+                svr="success" if svr_available else ("failed" if svr_error else "not_available"),
+                lid_method=lid_method,
+                lid_confidence=round(lid_confidence, 3),
             ),
             detected_language=detected_lang,
         )
