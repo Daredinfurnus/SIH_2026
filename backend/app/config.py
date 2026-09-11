@@ -35,5 +35,13 @@ class Settings:
     # ---- Language ------------------------------------------------------------
     default_language: str = _get_env("DEFAULT_LANGUAGE", "en")
 
+    # ---- Firebase persistence ------------------------------------------------
+    # Path to the Firebase Admin SDK service account JSON key.  When unset
+    # the app runs without cloud persistence and falls back to in-memory only.
+    firebase_key_path: str = _get_env("FIREBASE_KEY_PATH", "")
+
+    # ---- Computed -------------------------------------------------------------
+    firebase_enabled: bool = bool(firebase_key_path.strip())
+
 
 settings = Settings()

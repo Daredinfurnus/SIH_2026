@@ -1,12 +1,36 @@
-"""
-TraumaSense — AI-assisted stress & trauma-related conversational assessment
+"""TraumaSense — AI-assisted stress & trauma-related conversational assessment
 SIH 2026 · Problem Statement 26093
 Team ESPADA-X · KCC Institute of Technology & Management
 
 Backend application root.
 """
+from __future__ import annotations
+
+import logging
+
+# ---------------------------------------------------------------------------
+# Root logger — configure BEFORE importing routes so that logs from
+# firebase_store / routes module init (e.g. Firebase connection, case
+# pre-loading) are visible on the console and in the uvicorn log.
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)-8s | %(name)s | %(message)s",
+)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# ---------------------------------------------------------------------------
+# Environment — load .env (if present) BEFORE importing settings so that
+# FIREBASE_KEY_PATH and other env vars are available at import time.
+# ---------------------------------------------------------------------------
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed; rely on the real environment
 
 from app.config import settings
 from app.api.routes import api_router
@@ -38,6 +62,8 @@ app.add_middleware(
         "http://localhost:5177",
         "http://localhost:5178",
         "http://localhost:5179",
+        # LAN access (the IP the frontend is served on)
+        "http://192.168.56.1:5173",
     ],
     allow_methods=["*"],
     allow_headers=["*"],
