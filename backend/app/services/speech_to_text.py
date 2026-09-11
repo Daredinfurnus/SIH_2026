@@ -60,7 +60,7 @@ class SpeechToTextService:
             return self._build_placeholder_segments(file_path)
 
         # --------------------------------------------------------------
-        # Helper: run Whisper transcription
+        # Helper: run Whisper transcription with a forced language
         # --------------------------------------------------------------
         def _run_transcription(
             forced_language: str | None,
@@ -121,45 +121,40 @@ class SpeechToTextService:
             )
 
         # --------------------------------------------------------------
-        # Pass 1: automatic language detection
+        # Language routing — uses the router's decision, not Whisper's
+        # auto-detect as the primary authority.
+        #
+        # When forced_language is provided (from the LID router), use it
+        # directly.  This prevents Whisper's internal language detector
+        # from misidentifying Hindi/Urdu-like speech as Urdu and then
+        # falling back to an en/hi logprob comparison.
+        #
+        # When forced_language is None (no LID available), Whisper
+        # auto-detects.  If it detects en/hi, use that.  If it detects
+        # anything else, return empty — DO NOT run en+hi and compare
+        # logprobs, because that is the Urdu misrouting path.
         # --------------------------------------------------------------
-        auto_segments, auto_logprob, detected_lang, detected_lang_prob = (
-            _run_transcription(None)
-        )
+        forced_language: str | None = language  # may be "en", "hi", or None
 
-        # --------------------------------------------------------------
-        # Decide which transcript to use
-        # --------------------------------------------------------------
-        if detected_lang in {"en", "hi"}:
-            # Whisper detected one of our supported languages.
-            best_segments = auto_segments
+        if forced_language in {"en", "hi"}:
+            # Router has decided.  Force Whisper to the selected language.
+            best_segments, _, detected_lang, _ = _run_transcription(forced_language)
 
         else:
-            # Whisper detected something outside our supported languages.
-            # Example: English audio incorrectly detected as Urdu.
-            #
-            # Only compare the two languages supported by our prototype.
-            en_segments, en_logprob, _, _ = _run_transcription("en")
-            hi_segments, hi_logprob, _, _ = _run_transcription("hi")
+            # No router decision — Whisper auto-detects.
+            auto_segments, auto_logprob, detected_lang, detected_lang_prob = (
+                _run_transcription(None)
+            )
 
-            if not en_segments and not hi_segments:
+            if detected_lang in {"en", "hi"}:
                 best_segments = auto_segments
-
-            elif not hi_segments:
-                best_segments = en_segments
-                detected_lang = "en"
-
-            elif not en_segments:
-                best_segments = hi_segments
-                detected_lang = "hi"
-
-            elif en_logprob >= hi_logprob:
-                best_segments = en_segments
-                detected_lang = "en"
-
             else:
-                best_segments = hi_segments
-                detected_lang = "hi"
+                # Whisper detected a language outside our supported set
+                # (e.g. Urdu).  Do NOT run en+hi logprob comparison —
+                # that is the Urdu misrouting path.  Return empty so the
+                # router can reject the audio rather than guess.
+                best_segments = []
+                detected_lang = detected_lang or "unknown"
 
         # --------------------------------------------------------------
         # Fallback

@@ -71,3 +71,9 @@ htmlcov/
 # SQLite (if used later)
 *.sqlite3
 *.db
+
+# ML model checkpoints (download separately; too large for Git)
+backend/models/lid/voxlingua107/*.ckpt
+backend/models/lid/voxlingua107/*.pt
+backend/models/lid/voxlingua107/*.wav
+backend/models/lid/voxlingua107/.cache/

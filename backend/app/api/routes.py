@@ -45,6 +45,10 @@ from app.services.scoring_engine import (
     ScoringPipeline,
     build_features_from_analysis_segment,
 )
+from app.services.language_identifier import (
+    get_language_identifier,
+    route_language,
+)
 from app.utils.validation import validate_upload
 
 api_router = APIRouter()
@@ -183,7 +187,7 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
     normalized_path = None
 
     try:
-        # ---- audio normalization -------------------------------------------
+        # ---- audio normalization-------------------------------------------
         meta = audio_svc.inspect(safe_path)
         duration = meta.get("duration_seconds", 0.0) or 0.0
 
@@ -195,10 +199,48 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         if norm_error and not ffmpeg_ok:
             logger.warning("Audio normalization skipped: %s", norm_error)
 
-        # ---- speech-to-text ------------------------------------------------
+        # ---- language identification (BEFORE ASR) ----------------------
+        # Run a dedicated spoken-language identification stage before ASR
+        # so that the application controls routing, not Whisper's internal
+        # language detector.  This prevents Whisper from misidentifying
+        # Hindi/Urdu-like speech as Urdu and then falling back to an
+        # en/hi logprob comparison (the Urdu misrouting path).
+        #
+        # When LID is unavailable, the pipeline falls back to Whisper
+        # auto-detection for backward compatibility.  When LID runs but
+        # reports an unsupported language (e.g. Urdu) or is too uncertain,
+        # the pipeline is halted before ASR.
+        try:
+            lid = get_language_identifier()
+            lid_result = lid.identify(normalized_path or safe_path)
+        except Exception as exc:
+            logger.warning("LID stage failed, falling back to Whisper auto-detect: %s", exc)
+            lid_result = {"language": "language_uncertain", "confidence": 0.0, "supported": False, "model_available": False}
+
+        # If LID model is not available, fall back to Whisper auto-detect.
+        if not lid_result.get("model_available", True):
+            logger.info("LID model unavailable — falling back to Whisper auto-detection")
+            routing = {"route": "auto", "language": "auto-detected", "halt": False}
+        else:
+            routing = route_language(lid_result)
+
+        if routing.get("halt"):
+            # Unsupported or uncertain language — stop before ASR.
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=ErrorResponse(
+                    detail=routing.get("reason", "Unsupported language."),
+                    error_code="UNSUPPORTED_LANGUAGE",
+                ).model_dump(),
+            )
+
+        # ---- speech-to-text----------------------------------------------
         stt = SpeechToTextService()
+        forced_lang: str | None = None
+        if routing.get("route") in {"en", "hi"}:
+            forced_lang = routing["route"]
         raw_segments = stt.transcribe(
-            normalized_path or safe_path, language=None, real_upload=True
+            normalized_path or safe_path, language=forced_lang, real_upload=True
         )
 
         if not raw_segments:
@@ -286,8 +328,10 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         # ---- build AnalysisResponse (legacy shape) from engine result -------
         case_id = _next_case_id()
 
-        # detected language
-        detected_lang = "en"
+        # detected language — from routing decision if available
+        detected_lang = routing.get("language", "auto-detected")
+        if detected_lang == "auto":
+            detected_lang = "auto-detected"
         for seg in raw_segments:
             dl = seg.get("detected_language")
             if dl and dl not in ("auto-detected", None):
@@ -366,6 +410,12 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             immediate_safety=immediate_safety,
         )
 
+        # Assistive recommendation from risk engine
+        recommendation = get_recommendation(
+            risk_level=engine_result["overall"]["risk_level"],
+            immediate_safety=immediate_safety,
+        )
+
         response = AnalysisResponse(
             case_id=case_id,
             file_name=os.path.basename(file.filename),
@@ -388,16 +438,14 @@ async def upload_and_analyze(file: UploadFile = File(...)) -> AnalysisResponse:
                 segment_count=len(engine_result["timeline"]),
                 immediate_safety=engine_result["overall"]["safety_immediate_flag"],
             ),
-            recommendation=(
-                "Assistive risk indicator — trained human review recommended."
-            ),
+            recommendation=recommendation,
             mode="upload",
             disclaimer=(
                 "Assistive risk indicator, not a clinical diagnosis. "
                 "High-risk indicators require trained human review."
             ),
             immediate_safety_indicators=engine_result["overall"]["safety_immediate_flag"],
-            language="en",
+            language=detected_lang if detected_lang != "auto-detected" else "en",
             analyzed_at=_now_iso(),
             model_status=ModelStatus(
                 asr=asr_status,

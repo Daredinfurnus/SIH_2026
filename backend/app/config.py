@@ -32,6 +32,13 @@ class Settings:
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads"
     )
 
+    # ---- Model cache --------------------------------------------------------
+    # Base directory for downloaded ML model assets.  Each service resolves
+    # its own subdirectory beneath this path.
+    model_cache_dir: str = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"
+    )
+
     # ---- Language ------------------------------------------------------------
     default_language: str = _get_env("DEFAULT_LANGUAGE", "en")
 
